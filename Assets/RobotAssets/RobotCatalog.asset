@@ -1,0 +1,69 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f9ec699dc7490ff40a9a3e8b026fb9c6, type: 3}
+  m_Name: RobotCatalog
+  m_EditorClassIdentifier: Assembly-CSharp::VRInteraction.Placement.RobotCatalog
+  entries:
+  - displayName: Universal Robots UR3
+    kind: 0
+    prefab: {fileID: 6370855143949229613, guid: cc7d92455851c4a4986de4026ec7c1b8, type: 3}
+    hmiLocalOffset: {x: 0.55, y: 1.15, z: 0}
+    hmiLocalEuler: {x: 0, y: -90, z: 0}
+    spawnHeightOffset: 0
+    reachRadius: 0.5
+    reachCenterLocal: {x: 0, y: 0.152, z: 0}
+    driveSpeed: 1.5
+    turnSpeed: 90
+    wheelRadius: 0.16459
+    halfTrack: 0.29153
+    leftWheelNames:
+    - front_left_wheel_link
+    - rear_left_wheel_link
+    rightWheelNames:
+    - front_right_wheel_link
+    - rear_right_wheel_link
+  - displayName: KUKA KR 600 FORTEC
+    kind: 0
+    prefab: {fileID: 6792269647525028975, guid: 86fb65c31451fa740b1b5ceecb2e03a6, type: 3}
+    hmiLocalOffset: {x: 2.2, y: 1.7, z: 0}
+    hmiLocalEuler: {x: 0, y: -90, z: 0}
+    spawnHeightOffset: 0
+    reachRadius: 2.83
+    reachCenterLocal: {x: 0, y: 1.045, z: 0}
+    driveSpeed: 1.5
+    turnSpeed: 90
+    wheelRadius: 0.16459
+    halfTrack: 0.29153
+    leftWheelNames:
+    - front_left_wheel_link
+    - rear_left_wheel_link
+    rightWheelNames:
+    - front_right_wheel_link
+    - rear_right_wheel_link
+  - displayName: AgileX Scout V2
+    kind: 1
+    prefab: {fileID: 7508712483400049175, guid: 5d0377415e5dbdf4f9acb3cee7303685, type: 3}
+    hmiLocalOffset: {x: 0, y: 1.2, z: 0.9}
+    hmiLocalEuler: {x: 0, y: 180, z: 0}
+    spawnHeightOffset: 0.235
+    reachRadius: 0.5
+    reachCenterLocal: {x: 0, y: 0.152, z: 0}
+    driveSpeed: 1.5
+    turnSpeed: 90
+    wheelRadius: 0.16459
+    halfTrack: 0.29153
+    leftWheelNames:
+    - front_left_wheel_link
+    - rear_left_wheel_link
+    rightWheelNames:
+    - front_right_wheel_link
+    - rear_right_wheel_link

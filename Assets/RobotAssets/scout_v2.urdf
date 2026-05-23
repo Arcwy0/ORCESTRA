@@ -1,0 +1,179 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Flattened AgileX Scout V2 URDF, generated from
+  agilexrobotics/scout_ros (scout_description):
+    - urdf/scout_v2.xacro
+    - urdf/scout_wheel_type1.xacro / scout_wheel_type2.xacro
+
+  Xacro properties resolved:
+    base_x=0.925 base_y=0.38 base_z=0.21
+    wheelbase=0.498 (half 0.249)  track=0.58306 (half 0.29153)
+    wheel_vertical_offset=-0.0702  wheel_length=0.11653  wheel_radius=0.16459
+
+  Gazebo/ODE-only tags dropped (ignored by the Unity importer).
+  package:// paths resolve as <urdf-folder>/scout_description/...  — place this
+  file in Assets/RobotAssets/ (the PARENT of scout_description).
+
+  4 continuous wheel joints (axis 0 -1 0), skid-steer.  base_link is the root
+  and is NOT pinned immovable — the mobile base drives around the scene.
+-->
+<robot name="scout_v2">
+
+  <!-- ===================== LINKS ===================== -->
+
+  <link name="base_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://scout_description/meshes/base_link.dae"/>
+      </geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.008" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.925 0.38 0.21"/>
+      </geometry>
+    </collision>
+    <collision>
+      <origin xyz="0 0 0.035" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.154167 0.627 0.07"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="50"/>
+      <origin xyz="0.0 0.0 0.0"/>
+      <inertia ixx="2.288641" ixy="0" ixz="0" iyy="5.103976" iyz="0" izz="3.431465"/>
+    </inertial>
+  </link>
+
+  <link name="front_right_wheel_link">
+    <inertial>
+      <mass value="8"/>
+      <origin xyz="0 0 0"/>
+      <inertia ixx="0.1171" ixy="0" ixz="0" iyy="0.1361" iyz="0" izz="0.1171"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://scout_description/meshes/wheel_type1.dae"/>
+      </geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="1.5707963267948966 0 0"/>
+      <geometry>
+        <cylinder length="0.11653" radius="0.16459"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <link name="front_left_wheel_link">
+    <inertial>
+      <mass value="8"/>
+      <origin xyz="0 0 0"/>
+      <inertia ixx="0.1171" ixy="0" ixz="0" iyy="0.1361" iyz="0" izz="0.1171"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://scout_description/meshes/wheel_type1.dae"/>
+      </geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="1.5707963267948966 0 0"/>
+      <geometry>
+        <cylinder length="0.11653" radius="0.16459"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <link name="rear_left_wheel_link">
+    <inertial>
+      <mass value="8"/>
+      <origin xyz="0 0 0"/>
+      <inertia ixx="0.1171" ixy="0" ixz="0" iyy="0.1361" iyz="0" izz="0.1171"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://scout_description/meshes/wheel_type1.dae"/>
+      </geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="1.5707963267948966 0 0"/>
+      <geometry>
+        <cylinder length="0.11653" radius="0.16459"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <link name="rear_right_wheel_link">
+    <inertial>
+      <mass value="8"/>
+      <origin xyz="0 0 0"/>
+      <inertia ixx="0.1171" ixy="0" ixz="0" iyy="0.1361" iyz="0" izz="0.1171"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://scout_description/meshes/wheel_type1.dae"/>
+      </geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="1.5707963267948966 0 0"/>
+      <geometry>
+        <cylinder length="0.11653" radius="0.16459"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <link name="front_mount"/>
+  <link name="rear_mount"/>
+
+  <!-- ===================== JOINTS ===================== -->
+
+  <joint name="front_right_wheel" type="continuous">
+    <parent link="base_link"/>
+    <child link="front_right_wheel_link"/>
+    <origin xyz="0.249 -0.29153 -0.0702" rpy="3.14 0 0"/>
+    <axis xyz="0 -1 0" rpy="0 0 0"/>
+    <dynamics damping="0.0" friction="20"/>
+  </joint>
+
+  <joint name="front_left_wheel" type="continuous">
+    <parent link="base_link"/>
+    <child link="front_left_wheel_link"/>
+    <origin xyz="0.249 0.29153 -0.0702" rpy="0 0 0"/>
+    <axis xyz="0 -1 0" rpy="0 0 0"/>
+    <dynamics damping="0.0" friction="20"/>
+  </joint>
+
+  <joint name="rear_left_wheel" type="continuous">
+    <parent link="base_link"/>
+    <child link="rear_left_wheel_link"/>
+    <origin xyz="-0.249 0.29153 -0.0702" rpy="0 0 0"/>
+    <axis xyz="0 -1 0" rpy="0 0 0"/>
+    <dynamics damping="0.0" friction="20"/>
+  </joint>
+
+  <joint name="rear_right_wheel" type="continuous">
+    <parent link="base_link"/>
+    <child link="rear_right_wheel_link"/>
+    <origin xyz="-0.249 -0.29153 -0.0702" rpy="3.14 0 0"/>
+    <axis xyz="0 -1 0" rpy="0 0 0"/>
+    <dynamics damping="0.0" friction="20"/>
+  </joint>
+
+  <joint name="front_mount_joint" type="fixed">
+    <origin xyz="0.325 0 0.112701" rpy="0 0 0"/>
+    <parent link="base_link"/>
+    <child link="front_mount"/>
+  </joint>
+
+  <joint name="rear_mount_joint" type="fixed">
+    <origin xyz="-0.325 0 0.112701" rpy="0 0 0"/>
+    <parent link="base_link"/>
+    <child link="rear_mount"/>
+  </joint>
+
+</robot>

@@ -1,0 +1,43 @@
+# Normalize line endings
+* text=auto
+
+# ==== Unity text assets: force LF, treat as text ====
+*.cs            text diff=csharp
+*.shader        text
+*.cginc         text
+*.uss           text
+*.uxml          text
+*.urdf          text
+*.xacro         text
+*.json          text
+*.yaml          text
+*.yml           text
+*.asmdef        text
+
+# Unity YAML assets - keep as text so diffs/merges work
+*.unity         text
+*.prefab        text
+*.mat           text
+*.asset         text
+*.meta          text
+*.controller    text
+*.anim          text
+
+# ==== Git LFS: binary 3D / media assets ====
+*.stl           filter=lfs diff=lfs merge=lfs -text
+*.dae           filter=lfs diff=lfs merge=lfs -text
+*.fbx           filter=lfs diff=lfs merge=lfs -text
+*.obj           filter=lfs diff=lfs merge=lfs -text
+*.blend         filter=lfs diff=lfs merge=lfs -text
+*.png           filter=lfs diff=lfs merge=lfs -text
+*.jpg           filter=lfs diff=lfs merge=lfs -text
+*.jpeg          filter=lfs diff=lfs merge=lfs -text
+*.tga           filter=lfs diff=lfs merge=lfs -text
+*.psd           filter=lfs diff=lfs merge=lfs -text
+*.tif           filter=lfs diff=lfs merge=lfs -text
+*.exr           filter=lfs diff=lfs merge=lfs -text
+*.hdr           filter=lfs diff=lfs merge=lfs -text
+*.wav           filter=lfs diff=lfs merge=lfs -text
+*.mp3           filter=lfs diff=lfs merge=lfs -text
+*.ogg           filter=lfs diff=lfs merge=lfs -text
+*.mp4           filter=lfs diff=lfs merge=lfs -text
