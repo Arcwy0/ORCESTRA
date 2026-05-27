@@ -345,6 +345,12 @@ namespace VRInteraction.Editor
         [MenuItem("UR3/Mode/XR (Quest)", priority = 41)]
         public static void SwitchToXR() => SetRigMode(RigModeManager.RigMode.XR);
 
+        [MenuItem("UR3/Mode/VR Headset (no passthrough)", priority = 50)]
+        public static void SwitchToVR() => SetPassthroughMode(false);
+
+        [MenuItem("UR3/Mode/MR Passthrough", priority = 51)]
+        public static void SwitchToMR() => SetPassthroughMode(true);
+
         private static void SetRigMode(RigModeManager.RigMode mode)
         {
             var mgr = Object.FindAnyObjectByType<RigModeManager>();
@@ -356,6 +362,24 @@ namespace VRInteraction.Editor
             }
             mgr.BakeMode(mode);
             Debug.Log($"[RigMode] Scene baked to {mode} mode. Save (Ctrl+S).");
+        }
+
+        // Bakes the VR/MR choice. Forces XR mode too (passthrough only applies
+        // in the headset rig), so picking MR is a one-click "go to passthrough".
+        private static void SetPassthroughMode(bool passthrough)
+        {
+            var mgr = Object.FindAnyObjectByType<RigModeManager>();
+            if (mgr == null)
+            {
+                Debug.LogWarning("[RigMode] No RigModeManager in scene. " +
+                                 "Run UR3 → Setup XR Rig first.");
+                return;
+            }
+            mgr.BakeMode(RigModeManager.RigMode.XR);
+            mgr.BakePassthrough(passthrough);
+            Debug.Log($"[RigMode] Scene baked to {(passthrough ? "MR passthrough" : "VR")} " +
+                      "mode. Save (Ctrl+S). Enable the 'VRInteraction Passthrough " +
+                      "Blend' OpenXR feature if you haven't yet.");
         }
 
         // -----------------------------------------------------------------------

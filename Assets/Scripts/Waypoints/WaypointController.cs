@@ -24,6 +24,15 @@ namespace VRInteraction.Waypoints
     {
         [Tooltip("Work-plane height nudge in metres.")]
         public float heightStep = 0.05f;
+        [Tooltip("XR only: starting distance in front of the controller the held " +
+                 "point floats, in metres. The operator positions it by hand and " +
+                 "pushes it nearer/farther with the right thumbstick.")]
+        public float heldDistanceXr = 0.18f;
+        [Tooltip("XR only: how fast the right thumbstick pushes the held point " +
+                 "along the ray, in metres per second at full deflection.")]
+        public float depthRateXr = 1.2f;
+        [Tooltip("XR only: farthest the held point can be pushed along the ray.")]
+        public float maxHeldDistanceXr = 6f;
         [Tooltip("How densely the spline is sampled (points per span).")]
         public int splineResolution = 24;
         [Tooltip("CCD iterations per sample during the offline pre-solve.")]
@@ -58,6 +67,7 @@ namespace VRInteraction.Waypoints
         private Vector3 _center;
         private float _reach;
         private float _placeHeight;
+        private float _heldDistance;            // XR: live held-point distance
         private int _wpIndex;                   // current target during mobile follow
         private float _calibT;                  // drive-forward calibration timer
 
@@ -113,6 +123,7 @@ namespace VRInteraction.Waypoints
 
             if (_state == State.Placing)
             {
+                UpdateHeldDistance();
                 bool valid = ComputeHeldPoint(out var p);
                 if (_held != null)
                 {
@@ -226,6 +237,7 @@ namespace VRInteraction.Waypoints
             }
             else _recStartJoints = null;
 
+            _heldDistance = heldDistanceXr;
             BuildHeld();
             ClearPath();
             SetState(State.Placing);
@@ -244,13 +256,44 @@ namespace VRInteraction.Waypoints
             return g != null ? g.transform.position.y : 0f;
         }
 
+        // Right thumbstick pushes the held point farther / pulls it nearer along
+        // the controller ray (XR manipulator only) so far-away targets can be
+        // taught without physically reaching. Clamped to a sane span.
+        private void UpdateHeldDistance()
+        {
+            if (_pointer == null) return;
+            if (!_pointer.IsSpatial || _kind == RobotKind.Mobile) return;
+
+            float axis = _pointer.DepthAxis();
+            if (axis != 0f)
+                _heldDistance = Mathf.Clamp(
+                    _heldDistance + axis * depthRateXr * Time.deltaTime,
+                    0.05f, Mathf.Max(0.1f, maxHeldDistanceXr));
+
+            if (_heightInfo != null)
+                _heightInfo.text = $"Reach dist  {_heldDistance,5:0.00} m";
+        }
+
         // ------------------------------------------------------- placing
         private bool ComputeHeldPoint(out Vector3 p)
         {
-            // PC stand-in: ray ∩ horizontal work-plane at the chosen height.
-            // (An XR build will instead read the controller tip via the
-            //  pointer abstraction — the rest of the flow is unchanged.)
             var ray = _pointer.GetRay();
+
+            // XR + manipulator: the operator holds the TCP target directly in
+            // 3D, a distance in front of the controller that the right thumbstick
+            // pushes nearer/farther along the ray. Far more intuitive than aiming
+            // a ray at an invisible work-plane and nudging its height. The
+            // green/red held marker still shows whether the point is inside the
+            // reach sphere.
+            if (_pointer.IsSpatial && _kind != RobotKind.Mobile)
+            {
+                p = ray.origin + ray.direction * _heldDistance;
+                return true;
+            }
+
+            // PC (any robot) and XR + mobile platform: ray ∩ horizontal
+            // work-plane at the chosen height. Mobile route points belong on the
+            // floor, so the ray-to-plane hit is exactly what we want there.
             var plane = new Plane(Vector3.up, new Vector3(0, _placeHeight, 0));
             if (plane.Raycast(ray, out float enter) && enter > 0f)
             {
@@ -914,12 +957,18 @@ namespace VRInteraction.Waypoints
                     SetHint("Hover a robot to highlight it, click to choose.");
                     break;
                 case State.Placing:
+                {
+                    bool spatial = _pointer != null && _pointer.IsSpatial;
                     SetHint(_kind == RobotKind.Mobile
-                        ? "Click on the floor to drop a route point. " +
-                          "Esc = cancel."
-                        : "Click inside the sphere to drop a point. " +
-                          "− / + change height. Esc = cancel.");
+                        ? "Point at the floor and pull the trigger to drop a " +
+                          "route point. B = cancel."
+                        : spatial
+                            ? "Aim inside the sphere; right stick sets distance " +
+                              "along the ray; trigger drops a point. B = cancel."
+                            : "Click inside the sphere to drop a point. " +
+                              "− / + change height. Esc = cancel.");
                     break;
+                }
                 case State.Review:
                     SetHint("Spline built. SAVE it, EDIT it, or RUN it.");
                     break;
@@ -1010,7 +1059,7 @@ namespace VRInteraction.Waypoints
             Vector2 size, string title)
         {
             var c = UiKit.WorldCanvas(name, transform,
-                new Vector3(0.0f, 1.32f, 1.45f), new Vector3(0, 180, 0),
+                new Vector3(0.0f, 1.6f, 1.45f), new Vector3(0, 180, 0),
                 size, 0.0016f);
             root = c.gameObject;
             UiKit.Panel(c.transform, new Color(0.10f, 0.12f, 0.13f, 0.96f));

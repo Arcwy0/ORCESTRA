@@ -2,6 +2,8 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
+using UnityEngine.XR.ARFoundation;
+using UnityEngine.XR.ARSubsystems;
 using VRInteraction.Robot;
 using VRInteraction.UI;
 
@@ -37,6 +39,13 @@ namespace VRInteraction.Placement
 
         private PlacementPointer _pointer;
         private LineRenderer _laser;
+
+        // Real-surface raycasting (MR). Lives on the XR Origin (added by
+        // UR3 → Setup MR); inactive in Desktop/VR, where we fall back to the
+        // flat math floor at groundY.
+        private ARRaycastManager _arRaycaster;
+        private static readonly List<ARRaycastHit> _arHits =
+            new List<ARRaycastHit>();
 
         private int _selected = -1;
         private GameObject _ghost;
@@ -102,7 +111,7 @@ namespace VRInteraction.Placement
 
             if (_state == State.Aiming)
             {
-                if (TryGroundPoint(out var p))
+                if (TrySurfacePoint(out var p))
                 {
                     _ghostPos = p;
                     ApplyGhostTransform();
@@ -241,7 +250,7 @@ namespace VRInteraction.Placement
             if (info == null) info = robot.AddComponent<PlacedRobot>();
             info.kind = entry.kind;
             info.displayName = robot.name;
-            info.reachRadius = entry.reachRadius;
+            info.reachRadius = entry.reachRadius * PlacedRobot.WorkAreaScale;
             info.reachCenterLocal = entry.reachCenterLocal;
 
             var pendant = SpawnPendant(robot, entry);
@@ -327,10 +336,19 @@ namespace VRInteraction.Placement
             GameObject robot, Vector3 pos, Quaternion rot)
         {
             robot.transform.SetPositionAndRotation(pos, rot);
-            var rootAb = System.Array.Find(
-                robot.GetComponentsInChildren<ArticulationBody>(true),
-                a => a.isRoot);
-            if (rootAb != null) rootAb.TeleportRoot(pos, rot);
+
+            // Teleport EVERY articulation root, not just the first one found.
+            // Some URDF imports (e.g. the UR3) wrap the arm in an AB-less
+            // "base_link" frame whose children — the real arm chain AND a stray
+            // fixed "base" frame — are BOTH articulation roots. Teleporting only
+            // the first root could move the stray frame and leave the arm
+            // behind (the container/pendant move, the robot doesn't). Each root
+            // is sent to where the just-moved transform hierarchy now puts it,
+            // which also respects any local offset of the root under the
+            // container.
+            foreach (var ab in robot.GetComponentsInChildren<ArticulationBody>(true))
+                if (ab.isRoot)
+                    ab.TeleportRoot(ab.transform.position, ab.transform.rotation);
         }
 
         // The articulation is only registered with the physics scene on the
@@ -371,7 +389,8 @@ namespace VRInteraction.Placement
         private void BuildReach(RobotCatalog.Entry entry)
         {
             DestroyReach();
-            float r = Mathf.Max(0.05f, entry.reachRadius);
+            float r = Mathf.Max(0.05f,
+                entry.reachRadius * PlacedRobot.WorkAreaScale);
             _reach = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
             _reach.name = "ReachEnvelope";
             var col = _reach.GetComponent<Collider>();
@@ -389,8 +408,10 @@ namespace VRInteraction.Placement
         private void UpdateReach()
         {
             if (_reach != null)
+                // Sit the disc on whatever surface the ghost rests on (table or
+                // floor), just above it to avoid z-fighting.
                 _reach.transform.position = new Vector3(
-                    _ghostPos.x, groundY + 0.002f, _ghostPos.z);
+                    _ghostPos.x, _ghostPos.y + 0.002f, _ghostPos.z);
         }
 
         private void DestroyReach()
@@ -431,9 +452,43 @@ namespace VRInteraction.Placement
         }
 
         // ---------------------------------------------------------------- util
-        private bool TryGroundPoint(out Vector3 point)
+        // The AR raycast manager sits on the XR Origin (disabled in Desktop),
+        // so search inactive objects and cache the result.
+        private ARRaycastManager ArRaycaster
+        {
+            get
+            {
+                if (_arRaycaster == null)
+                    _arRaycaster = FindAnyObjectByType<ARRaycastManager>(
+                        FindObjectsInactive.Include);
+                return _arRaycaster;
+            }
+        }
+
+        // Where the ghost should rest. In MR, hit a real detected surface
+        // (table, desk, floor); the point carries the surface height so the
+        // robot can sit on a table, not just the floor. Falls back to the flat
+        // math floor at groundY for Desktop/VR or before any planes are found.
+        private bool TrySurfacePoint(out Vector3 point)
         {
             var ray = _pointer.GetRay();
+
+            var rc = ArRaycaster;
+            if (rc != null && rc.isActiveAndEnabled &&
+                rc.Raycast(ray, _arHits, TrackableType.PlaneWithinPolygon))
+            {
+                foreach (var hit in _arHits)
+                {
+                    // Only land on (roughly) horizontal, upward-facing surfaces
+                    // — never a wall or ceiling.
+                    if (Vector3.Dot(hit.pose.up, Vector3.up) > 0.7f)
+                    {
+                        point = hit.pose.position;
+                        return true;
+                    }
+                }
+            }
+
             var plane = new Plane(Vector3.up, new Vector3(0, groundY, 0));
             if (plane.Raycast(ray, out float enter) && enter > 0f)
             {
@@ -477,8 +532,8 @@ namespace VRInteraction.Placement
                     SetHint("Pick a model from the catalog.");
                     break;
                 case State.Aiming:
-                    SetHint("Point at the floor and CLICK to drop the base. " +
-                            "Esc = cancel.");
+                    SetHint("Point at a surface (floor or table) and CLICK to " +
+                            "drop the base. Esc = cancel.");
                     break;
                 case State.FineTune:
                     SetHint("Fine-tune X / Y / Z / Yaw, then CONFIRM. " +
@@ -546,7 +601,7 @@ namespace VRInteraction.Placement
         private void BuildCatalogPanel()
         {
             var c = UiKit.WorldCanvas("Placement_Catalog", transform,
-                new Vector3(-0.7f, 1.3f, 1.4f), new Vector3(0, 180, 0),
+                new Vector3(-0.7f, 1.6f, 1.4f), new Vector3(0, 180, 0),
                 new Vector2(620, 560), 0.0016f);
             _catalogPanel = c.gameObject;
             UiKit.Panel(c.transform, new Color(0.10f, 0.11f, 0.13f, 0.96f));
@@ -584,8 +639,15 @@ namespace VRInteraction.Placement
         {
             var c = UiKit.WorldCanvas("Placement_FineTune", transform,
                 new Vector3(0.75f, 1.3f, 1.4f), new Vector3(0, 180, 0),
-                new Vector2(720, 620), 0.0016f);
+                new Vector2(720, 620), 0.0012f);
             _finePanel = c.gameObject;
+            // Fine-tune panel follows the operator: kept off to the right and
+            // pushed back so it doesn't block the view of the robot being placed
+            // (all four fields are tunable live on the FollowOperator).
+            var follow = _finePanel.AddComponent<FollowOperator>();
+            follow.distance = 0.9f;
+            follow.rightOffset = 0.28f;
+            follow.upOffset = 0.08f;
             UiKit.Panel(c.transform, new Color(0.10f, 0.11f, 0.13f, 0.96f));
 
             var header = UiKit.Image("Header", c.transform,

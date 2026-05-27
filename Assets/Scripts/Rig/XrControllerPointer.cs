@@ -25,9 +25,44 @@ namespace VRInteraction.Rig
         [Tooltip("Transform at the tip of the ray (XR Ray Interactor's rayOriginTransform).")]
         public Transform rayOrigin;
 
+        // The XR controller is held in 3D, so tools place points at the
+        // controller tip rather than on a screen-projected work-plane.
+        public override bool IsSpatial => true;
+
         // ----- edge detection ------------------------------------------------
+        // Edges are computed ONCE per frame in Update and cached. Reading them
+        // (ConfirmPressedThisFrame / CancelPressedThisFrame) must NOT consume
+        // the event: several tools poll the same pointer each frame (the
+        // placement controller polls even while idle), and a consume-on-read
+        // design let whichever ran first eat the press so the others — e.g. the
+        // waypoint tool — never saw it.
         private bool _prevTrigger;
         private bool _prevCancel;
+        private bool _confirmEdge;
+        private bool _cancelEdge;
+
+        private void Update()
+        {
+            // ---- trigger → confirm ----------------------------------------
+            var dev = InputDevices.GetDeviceAtXRNode(hand);
+            bool trig = false;
+            dev.TryGetFeatureValue(CommonUsages.triggerButton, out trig);
+            if (!trig)
+            {
+                float axis = 0f;
+                if (dev.TryGetFeatureValue(CommonUsages.trigger, out axis))
+                    trig = axis > 0.7f;
+            }
+            _confirmEdge = trig && !_prevTrigger;
+            _prevTrigger = trig;
+
+            // ---- B button → cancel ----------------------------------------
+            var rdev = InputDevices.GetDeviceAtXRNode(XRNode.RightHand);
+            bool cancel = false;
+            rdev.TryGetFeatureValue(CommonUsages.secondaryButton, out cancel);
+            _cancelEdge = cancel && !_prevCancel;
+            _prevCancel = cancel;
+        }
 
         // -----------------------------------------------------------------------
         public override Ray GetRay()
@@ -43,37 +78,22 @@ namespace VRInteraction.Rig
             return new Ray(Vector3.zero, Vector3.forward);
         }
 
-        public override bool ConfirmPressedThisFrame()
+        // Non-consuming reads: return the cached per-frame edge so every tool
+        // that polls this frame observes the same press.
+        public override bool ConfirmPressedThisFrame() =>
+            !IsOverUi() && _confirmEdge;
+
+        public override bool CancelPressedThisFrame() => _cancelEdge;
+
+        // Right thumbstick Y → push the held point farther / pull it nearer
+        // along the ray. Dead-zoned so a resting stick doesn't drift the point.
+        public override float DepthAxis()
         {
-            if (IsOverUi()) return false;
-
-            var dev = InputDevices.GetDeviceAtXRNode(hand);
-            bool cur = false;
-            dev.TryGetFeatureValue(CommonUsages.triggerButton, out cur);
-
-            // If triggerButton not available try trigger axis threshold
-            if (!cur)
-            {
-                float axis = 0f;
-                if (dev.TryGetFeatureValue(CommonUsages.trigger, out axis))
-                    cur = axis > 0.7f;
-            }
-
-            bool pressed = cur && !_prevTrigger;
-            _prevTrigger = cur;
-            return pressed;
-        }
-
-        public override bool CancelPressedThisFrame()
-        {
-            // B button (secondaryButton) on the right Touch controller
             var dev = InputDevices.GetDeviceAtXRNode(XRNode.RightHand);
-            bool cur = false;
-            dev.TryGetFeatureValue(CommonUsages.secondaryButton, out cur);
-
-            bool pressed = cur && !_prevCancel;
-            _prevCancel = cur;
-            return pressed;
+            if (dev.TryGetFeatureValue(CommonUsages.primary2DAxis, out var axis) &&
+                Mathf.Abs(axis.y) > 0.15f)
+                return axis.y;
+            return 0f;
         }
     }
 }

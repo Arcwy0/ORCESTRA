@@ -26,11 +26,8 @@ namespace VRInteraction.UI
                 typeof(Canvas), typeof(CanvasScaler), typeof(GraphicRaycaster));
             if (parent != null) go.transform.SetParent(parent, false);
 
-#if UNITY_XR_INTERACTION_TOOLKIT
-            // Required for XR ray interactors to click this world-space UI.
-            if (go.GetComponent<UnityEngine.XR.Interaction.Toolkit.UI.TrackedDeviceGraphicRaycaster>() == null)
-                go.AddComponent<UnityEngine.XR.Interaction.Toolkit.UI.TrackedDeviceGraphicRaycaster>();
-#endif
+            // Let XR controller rays click this world-space UI.
+            AddXrRaycaster(go);
 
             // Always face the operator. The initial worldEuler below is
             // overwritten in LateUpdate after the first frame.
@@ -129,6 +126,21 @@ namespace VRInteraction.UI
             rt.pivot = new Vector2(0, 1);
             rt.sizeDelta = new Vector2(w, h);
             rt.anchoredPosition = new Vector2(x, -y);
+        }
+
+        /// <summary>
+        /// Adds a <c>TrackedDeviceGraphicRaycaster</c> to a world-space canvas so
+        /// XR controller rays can click it. No-op if XRI isn't present or the
+        /// raycaster already exists. Call this for any canvas not built through
+        /// <see cref="WorldCanvas"/> (e.g. the robot teach pendants).
+        /// </summary>
+        public static void AddXrRaycaster(GameObject canvasGo)
+        {
+#if UNITY_XR_INTERACTION_TOOLKIT
+            if (canvasGo == null) return;
+            if (canvasGo.GetComponent<UnityEngine.XR.Interaction.Toolkit.UI.TrackedDeviceGraphicRaycaster>() == null)
+                canvasGo.AddComponent<UnityEngine.XR.Interaction.Toolkit.UI.TrackedDeviceGraphicRaycaster>();
+#endif
         }
 
         public static void EnsureEventSystem()

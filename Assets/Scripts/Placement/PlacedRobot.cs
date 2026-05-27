@@ -28,6 +28,14 @@ namespace VRInteraction.Placement
     /// </summary>
     public class PlacedRobot : MonoBehaviour
     {
+        /// <summary>
+        /// Factor applied to a catalog entry's physical reach when drawing the
+        /// working area and validating waypoints, so the usable envelope is a
+        /// little larger than the bare datasheet reach. Single source of truth:
+        /// placement preview, stored reach, and waypoint sphere all use it.
+        /// </summary>
+        public const float WorkAreaScale = 1.3f;
+
         public RobotKind kind = RobotKind.Manipulator;
         public string displayName = "Robot";
 

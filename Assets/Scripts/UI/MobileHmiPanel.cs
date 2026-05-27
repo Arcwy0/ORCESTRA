@@ -117,6 +117,7 @@ namespace VRInteraction.UI
                 typeof(Canvas), typeof(CanvasScaler), typeof(GraphicRaycaster));
             canvasGo.transform.SetParent(transform, false);
             canvasGo.AddComponent<Billboard>();
+            UiKit.AddXrRaycaster(canvasGo);       // XR controller ray can click it
 
             _canvas = canvasGo.GetComponent<Canvas>();
             _canvas.renderMode = RenderMode.WorldSpace;

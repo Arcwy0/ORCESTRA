@@ -17,6 +17,22 @@ namespace VRInteraction.Placement
         public abstract bool ConfirmPressedThisFrame();
         public abstract bool CancelPressedThisFrame();
 
+        /// <summary>
+        /// Forward/back axis (-1..1) used to push a held point farther along the
+        /// ray or pull it closer — the XR right thumbstick's Y axis. Returns 0 on
+        /// devices without a stick (e.g. the desktop mouse), where depth is set a
+        /// different way.
+        /// </summary>
+        public virtual float DepthAxis() => 0f;
+
+        /// <summary>
+        /// True when the pointer positions points directly in 3D space (an XR
+        /// controller held in the hand) rather than via a screen ray projected
+        /// onto a work-plane (a mouse). Tools use this to place a held point at
+        /// the controller tip instead of intersecting a horizontal plane.
+        /// </summary>
+        public virtual bool IsSpatial => false;
+
         /// <summary>True while the pointer is hovering a uGUI element.</summary>
         public bool IsOverUi()
         {
