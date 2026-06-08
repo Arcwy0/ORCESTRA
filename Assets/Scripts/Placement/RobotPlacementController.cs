@@ -70,6 +70,7 @@ namespace VRInteraction.Placement
         // UI
         private GameObject _catalogPanel;
         private GameObject _finePanel;
+        private GameObject _deleteBtnGo;     // visible only when relocating
         private Text _hint;
         private Text _xVal, _yVal, _zVal, _yawVal;
 
@@ -286,6 +287,28 @@ namespace VRInteraction.Placement
             _selected = -1;
             _ghostYaw = 0f;
             SetState(State.Idle);
+        }
+
+        // Removes the robot the operator is currently re-positioning, along
+        // with its teach pendant. Only reachable from the fine-tune panel while
+        // _relocating is set (the DELETE button is hidden otherwise).
+        private void DeleteRelocating()
+        {
+            if (_relocating == null) return;
+            var p = _relocating;
+            string name = p.robot != null ? p.robot.name : "robot";
+
+            _relocating = null;
+            _placed.Remove(p);
+            if (p.pendant != null) Destroy(p.pendant);
+            if (p.robot   != null) Destroy(p.robot);
+
+            DestroyGhost();
+            DestroyReach();
+            _selected = -1;
+            _ghostYaw = 0f;
+            SetState(State.Idle);
+            SetHint($"Deleted {name}.");
         }
 
         // ------------------------------------------------------------ relocate
@@ -512,6 +535,10 @@ namespace VRInteraction.Placement
                 _catalogPanel.SetActive(s == State.Catalog);
             if (_finePanel != null)
                 _finePanel.SetActive(s == State.FineTune);
+            // Delete only makes sense while moving an already-placed robot.
+            if (_deleteBtnGo != null)
+                _deleteBtnGo.SetActive(
+                    s == State.FineTune && _relocating != null);
 
             // Claim / release the shared interaction lock (do not clobber the
             // waypoint tool if it currently owns it).
@@ -673,6 +700,15 @@ namespace VRInteraction.Placement
             var cancel = UiKit.Button("Cancel", c.transform, "CANCEL", 24,
                 new Color(0.55f, 0.18f, 0.18f, 1f), CancelPlacement);
             UiKit.Box(UiKit.Rt(cancel), 376, 470, 320, 70);
+
+            // Delete is only meaningful when relocating an existing robot —
+            // there's nothing to delete during a fresh placement. SetState
+            // shows/hides this on entering FineTune.
+            var del = UiKit.Button("Delete", c.transform, "DELETE ROBOT", 22,
+                new Color(0.45f, 0.13f, 0.13f, 1f), DeleteRelocating);
+            UiKit.Box(UiKit.Rt(del), 24, 548, 672, 58);
+            _deleteBtnGo = del.gameObject;
+            _deleteBtnGo.SetActive(false);
         }
 
         private Text StepRow(Transform parent, float y, string id,

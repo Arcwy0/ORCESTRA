@@ -1,413 +1,242 @@
-# VR Interaction — UR3 Digital Twin (Stage 1)
+# VR Interaction — UR3 / KUKA / Scout Digital Twins
 
-Immersive no-code robot programming on a digital twin. **Stage 1** goal: load
-the UR3 manipulator from URDF into a Unity scene and drive it with a virtual
-replica of the UR teach pendant, tested on PC (VR/MR comes later).
+Immersive no-code robot programming on digital twins. Place industrial-arm and
+mobile-base twins in a Unity scene, teach a TCP path or a floor route by hand
+in VR / Mixed Reality on a Meta Quest 3, then play it back rigidly. Runs as a
+**standalone Quest APK** — once installed, the PC is not needed.
 
-- **Unity:** 6000.4.x (Unity 6)
-- **Render pipeline:** URP
-- **Robot source:** `ros-industrial/universal_robot` (`noetic-devel`), UR3
-
----
-
-## What is already in the repo
-
-| Path | Purpose |
+| Item | Value |
 |---|---|
-| `Assets/RobotAssets/ur3.urdf` | Flattened UR3 URDF (DAE visuals) generated from the official xacro/YAML params |
-| `Assets/RobotAssets/ur3_stl.urdf` | Fallback URDF (STL visuals) if the importer rejects `.dae` |
-
-> **URDF location matters.** The file lives in `Assets/RobotAssets/` (the
-> *parent* of `ur_description`), NOT inside `ur_description`. The Unity URDF
-> Importer resolves `package://ur_description/...` as
-> `<urdf-folder>/ur_description/...`; placing the URDF inside `ur_description`
-> produces a doubled `ur_description/ur_description` path and the import fails.
-| `Assets/Scripts/Robot/UR3JointController.cs` | Drives the 6 revolute `ArticulationBody` joints (deg, speed-limited) |
-| `Assets/Scripts/UI/UR3HmiPanel.cs` | World-space teach-pendant replica (sliders, jog ±, HOME/ZERO/STOP/RESET, speed) |
-| `Assets/Scripts/Rig/DesktopFlyCamera.cs` | PC stand-in for the headset (RMB look, WASD move) |
-| `Assets/Scripts/Editor/UR3SceneBootstrapper.cs` | Scene assembly menus: `UR3 → Build Demo Scene` / `Fix Imported Robot` / `Setup Placement Scene` |
-| `Assets/Scripts/Placement/RobotCatalog.cs` | ScriptableObject catalog of placeable robots (extensible) |
-| `Assets/Scripts/Placement/RobotPlacementController.cs` | Catalog → ghost aim → fine-tune XYZ → spawn robot + per-robot pendant |
-| `Assets/Scripts/Placement/GhostBuilder.cs` | Translucent physics-free placement preview |
-| `Assets/Scripts/Placement/PlacementPointer.cs` | Pointer abstraction (PC mouse now, XR controller later) |
-| `Assets/Scripts/UI/UiKit.cs` | Shared world-space uGUI builder |
-
-The `com.unity.robotics.urdf-importer` package is already added in
-`Packages/manifest.json`.
+| Unity | 6000.x (Unity 6, URP) |
+| Target device | Meta Quest 3 / 3S (Quest 2 / Pro also fine) |
+| Modes | Desktop (mouse), VR (full immersion), **MR (passthrough)** |
+| Robots out of the box | UR3 (manipulator), KUKA KR600 R2830 (manipulator), Scout V2 (mobile, skid-steer) |
 
 ---
 
-## Setup steps (in the Unity Editor)
+## Quick start
 
-> Git must be on PATH (it is — git-lfs 3.7 detected). Unity needs it to fetch
-> the URDF Importer git package.
+### 1. Clone the repo
 
-### 1. Resolve packages
-Switch back to the Unity Editor window. It will detect the manifest change and
-download **URDF Importer**, then recompile. Wait until the spinner stops and
-the **Console** has no errors.
-
-### 2. Import the UR3 from URDF
-1. In the Project window open `Assets/RobotAssets/` (URDF is here, NOT in
-   `ur_description`).
-2. **Right-click `ur3.urdf` → "Import Robot from Selected URDF file"**.
-3. In the import dialog:
-   - **Axis Type:** `Y Axis`
-   - **Mesh Decomposer:** `VHACD`
-   - (Newer importer versions have no "Use Articulation Bodies" toggle —
-     Articulation Bodies are used by default.)
-4. Click **Import URDF**. A `ur3_robot` object appears in the Hierarchy.
-
-> If import errors out on the `.dae` meshes, repeat with **`ur3_stl.urdf`**
-> instead — same robot, simpler visuals.
-
-### 3. Build the demo scene
-Top menu: **`UR3 → Build Demo Scene`**.
-This adds a ground, light, fly-camera, attaches `UR3JointController` to the
-robot (auto-binds the 6 joints, pins the base), spawns the teach-pendant
-panel, and saves the scene to `Assets/Scenes/UR3_Demo.unity`.
-
-### 4. Test in simulation
-Press **Play**:
-- **Sliders** — set a target angle per joint (limits come from the URDF).
-- **− / +** — press-and-hold jog at the set speed.
-- **Speed** — global speed scale (teach-pendant style).
-- **HOME / ZERO** — go to all-zeros pose.
-- **STOP** — protective stop (freezes motion); **RESET** clears it.
-- **Camera** — hold right mouse to look, `WASD` move, `Q/E` down/up,
-  `Shift` sprint, wheel changes speed.
-
----
-
-## Stage 1.5 — Robot placement
-
-After the robot works in the demo scene, convert to the placement workflow:
-
-1. With the fixed UR3 in the scene, run **`UR3 → Setup Placement Scene`**.
-   This saves the robot as `Assets/RobotAssets/Prefabs/UR3.prefab`, creates
-   `RobotCatalog.asset`, clears the scene robot/pendant, and adds the
-   placement controller. Scene starts empty.
-2. **Play** → click **`▣ ROBOT CATALOG`** → pick a model.
-3. Point at the floor (mouse ray + laser) → **click** to drop the base.
-   - A translucent **reach disc** (≈ UR3 0.5 m) is drawn around the base so
-     you can judge whether the arm can cover the work area.
-   - The ghost turns **red** if its footprint overlaps an already-placed
-     robot (a warning — confirming is still allowed).
-4. Tune **X / Y / Z** *and* **Yaw** in the fine-tune window (−−/−/+/++
-   steps; yaw defaults to 5° / 45° steps).
-5. **CONFIRM** → the real robot spawns and its own teach pendant appears
-   beside it. Repeat to place more robots.
-6. **Move a placed robot:** in the idle state, **click any placed robot** —
-   it re-opens the fine-tune window so you can re-position / re-orient it
-   (its pendant follows). Esc leaves it untouched.
-
-The pointer is abstracted (`PlacementPointer`): swapping the PC mouse for an
-XR controller ray later does not touch the placement logic.
-
-> **Spawn-position note.** Immovable `ArticulationBody` roots ignore plain
-> transform writes once the physics scene has baked them. Robots are
-> therefore instantiated *already positioned* and re-asserted via
-> `ArticulationBody.TeleportRoot()` on the next physics step.
-
-## Stage 1.6 — Waypoint scenarios
-
-Teach a TCP path the placed robot will follow.
-
-> **Re-run `UR3 → Setup Placement Scene` once** after pulling this stage.
-> It now also refreshes the saved UR3 prefab so the new stiffer drive
-> settings (and solver iterations) propagate. The `WaypointController` is
-> added next to the placement controller. Robots placed at runtime are
-> auto-tagged.
-
-1. **Play** → click **`◎ WAYPOINTS`** (toolbar under the catalog bar).
-2. **Choose a robot:** hovering an entry in the list makes that robot in
-   the scene glow; click to confirm it.
-3. Its **reach volume** appears as a translucent hollow sphere centred at
-   the shoulder (UR3: 152 mm above base, 500 mm radius per UR datasheet —
-   override `reachRadius` / `reachCenterLocal` on the catalog entry for
-   other arms). A marker rides your pointer:
-   - **−/+ Height** sets the work-plane the marker slides on (3D points,
-     not just the floor).
-   - **Click** drops a point. If it is outside the reach sphere it is
-     **rejected** and an error toast shows for ~1 s.
-   - The next marker appears automatically; **UNDO LAST** removes the most
-     recent point; **DONE — BUILD SPLINE** finishes.
-4. A Catmull-Rom **spline** is drawn **from the current TCP, through every
-   dropped point** — the operator never has to teach the start.
-   - **EDIT POINTS** → back to placing (add / undo more).
-   - **RUN SIMULATION** → see playback below.
-
-### Playback model
-RUN runs an **offline CCD inverse-kinematics solve in one frame** over the
-sampled spline, producing one committed joint configuration per sample.
-The joint controller is then put into **external control** mode (its own
-ramp loop sits out) and the waypoint tool writes joint drive targets
-directly at `playbackRate` samples/sec, blending between adjacent
-configurations. Effects:
-- The arm tracks the spline **rigidly**, not via an online servo that
-  oscillates around it.
-- It **stops exactly at the last point** — playback ends when the index
-  hits the last config; `SnapStateToMeasured()` then re-syncs the
-  controller so it does not drag the arm anywhere afterward.
-
-The IK still reads live joint frames (no DH tables — works for any
-imported arm). If a different arm consistently drives *away* from the
-path, its joint-axis sign convention is inverted — flip the sign on
-`deltaDeg` in `SolveJointPath`.
-
-The waypoint and placement tools share a one-line mode lock (`AppState`)
-so a click is never consumed by both.
-
-## Stage 1.7 — Pendant polish
-
-Three usability upgrades to the teach pendant:
-
-1. **TCP mode.** Tabs at the top of the panel switch between
-   **JOINTS** (the original 6-slider/jog screen) and **TCP**, an
-   arrow pad like the real UR "Move" screen: a vertical ▲/▼ pair for
-   up/down (Y) and an ◄ ► / ▲ ▼ diamond for the horizontal X-Z plane.
-   Hold an arrow to jog; live X/Y/Z read-outs sit along the bottom.
-
-   Jog uses a **resolved-rate (damped-least-squares Jacobian) step**
-   (`CcdIkSolver.TcpJogDeltasDeg`): each frame the held arrows request a
-   small world move, the Jacobian `dq = Jᵀ(JJᵀ+λ²I)⁻¹·move` converts it
-   to joint increments, and the joints are commanded relative to their
-   measured pose. This **only reads** the joint frames — earlier I tried
-   a per-frame CCD that called `ArticulationBody.SetJointPositions` every
-   frame, which corrupts the live solver state and made the arm sag
-   instead of track. Speed follows `tcpJogSpeed * speedPercent`.
-
-2. **Collapse / expand.** A `▴`/`▾` button in the header shrinks the
-   pendant to just the title bar, freeing up the operator's view of
-   the scene. Click again to restore. Canvas pivot is set to its top
-   edge so the header does not move when the body folds away.
-
-3. **Billboarding.** Every world-space canvas built through
-   `UiKit.WorldCanvas` (placement toolbar, catalog, fine-tune, waypoint
-   panels) and every teach pendant now carries a `Billboard` component.
-   In `LateUpdate` it sets `transform.rotation` to face the main camera
-   (constrained to the world Y axis by default, so panels stay
-   upright). Operators can move around the cell and the menus always
-   read forward.
-
-The IK behind TCP mode and the offline waypoint trajectory now share
-one implementation in `VRInteraction.Robot.CcdIkSolver` — `SolveOnce`
-for single-target jog, `SolveBatch` for the full spline pre-solve.
-
-## Stage 2 — Quest 3 setup
-
-### Prerequisites (one-time, on this PC)
-
-| What | Where |
-|---|---|
-| **Android Build Support** (+ NDK/JDK) | Unity Hub → Installs → your Unity version → Add modules |
-| **Meta Quest Link** app | [meta.com/quest/setup](https://www.meta.com/quest/setup/) — install on PC |
-| **Developer Mode** on headset | Meta mobile app → your headset → Developer Mode ON |
-
----
-
-### A. Add XR packages (already done if you pulled this branch)
-
-`Packages/manifest.json` already contains:
+```bash
+git lfs install
+git clone https://github.com/Ivashka513/ORCESTRA.git
+cd ORCESTRA
 ```
-com.unity.xr.management          4.5.0
-com.unity.xr.openxr              1.13.1
-com.unity.xr.interaction.toolkit 3.1.1
+
+Git LFS is required — the `.stl` / `.dae` / `.fbx` robot meshes are stored as
+LFS objects (~70 MB total after cleanup).
+
+### 2. Open in Unity Hub
+
+Add the cloned folder as a project. Unity 6 (any 6000.x) downloads the
+packages from `Packages/manifest.json` on first open — wait until the spinner
+in the bottom-right stops and the **Console** has no errors.
+
+The URDF importer and Meta OpenXR packages are pinned in the manifest, so
+nothing else needs to be installed by hand.
+
+### 3. Open the demo scene
+
+`Assets/Scenes/UR3_Demo.unity` is the working scene. Hit **Play** to drive the
+UR3 with the teach pendant from the PC. To play in MR on the headset see
+[Running on the Quest](#running-on-the-quest) below.
+
+---
+
+## What's in the repo
+
 ```
-Switch back to the Unity Editor — it will download and compile them automatically.
+Assets/
+├── RobotAssets/
+│   ├── ur3.urdf, ur3_stl.urdf, kuka_kr600.urdf, scout_v2.urdf  (flat URDFs)
+│   ├── ur_description/        (UR3 meshes + xacro source)
+│   ├── kuka_fortec_description/   (kr600_r2830 meshes + xacro)
+│   ├── scout_description/     (Scout V2 meshes + xacro)
+│   ├── Prefabs/               (UR3.prefab, KUKA_KR600.prefab, Scout_V2.prefab,
+│   │                           shared URP materials)
+│   └── RobotCatalog.asset     (ScriptableObject listing placeable robots)
+├── Scenes/UR3_Demo.unity      (the working scene)
+└── Scripts/
+    ├── Editor/                (UR3 → … menu commands: scene setup, MR setup,
+    │                           catalog add/fix)
+    ├── Placement/             (robot catalog UI, ghost preview, surface
+    │                           detection, fine-tune, delete)
+    ├── Rig/                   (Desktop fly-cam, XR controller pointer,
+    │                           RigModeManager — Desktop ↔ VR ↔ MR + scene
+    │                           permission, MR floor collider, passthrough)
+    ├── Robot/                 (UR3JointController, MobileBaseController,
+    │                           CcdIkSolver)
+    ├── UI/                    (Teach pendants, Billboard, FollowOperator)
+    └── Waypoints/             (TCP path teach + spline + episode save/load)
+```
+
+Only one variant per robot ships (UR3 / KR600 R2830 / Scout V2). The original
+ROS packages contained ~15 UR sizes and 7 KUKA Fortec variants — they were
+trimmed since the catalog never used them.
 
 ---
 
-### B. Configure XR Plugin Management
+## Modes & controls
 
-**Edit → Project Settings → XR Plug-in Management** (install the package if prompted)
+The project has three runtime modes, switched at any time:
 
-#### Standalone tab (Monitor icon) — for Quest Link / in-Editor testing
-1. Tick **OpenXR**
-2. Click the ⚠ warning icon → fix any validation errors
-3. Under **OpenXR → Features** enable **Meta Quest Support** (or "Oculus Touch Controller Profile")
+| Mode | Camera | Input | Toggle |
+|---|---|---|---|
+| Desktop | mouse-look fly-camera | mouse + keyboard | `F12` |
+| VR | XR Origin (Quest) | right-controller ray | `F12` |
+| MR (passthrough) | XR Origin + real-world camera composited | right-controller ray | `F11` or **left-controller Y** |
 
-#### Android tab (Android robot icon) — for standalone APK
-1. Tick **OpenXR**
-2. Under **OpenXR → Features** enable **Meta Quest Feature Group** (covers all Quest models)
+`RigModeManager` swaps the active camera (`Camera.main` tag follows) and the
+active `PlacementPointer` (mouse vs. controller) on every toggle. The UI
+panels are world-space so they work unchanged across all three modes.
+
+### Desktop
+- **RMB** look · **WASD** move · **Q / E** down / up · **Shift** sprint · wheel: speed
+- **LMB** = confirm / drop point · **Esc** = cancel
+
+### VR / MR
+- Right controller **trigger** = confirm / drop point
+- Right controller **B** = cancel
+- Right thumbstick **Y** = push the held waypoint along the ray (XR manipulator-teach only)
+- Left controller **Y** = flip VR ↔ MR
 
 ---
 
-### C. Android Player Settings
+## Running on the Quest
 
-**Edit → Project Settings → Player → Android tab:**
+You have two ways to run the project on the headset.
+
+### A. Quest Link (in-Editor, fast iteration)
+1. Connect via USB-C **or** enable **Air Link** in the headset.
+2. In the headset, open **Quest Link** and connect to this PC.
+3. Back in Unity: **Edit → Project Settings → XR Plug-in Management → Standalone tab → tick OpenXR + Meta Quest Support**.
+4. Press **Play** in the Editor. The scene streams to the headset live.
+
+### B. Standalone APK (installed on the headset, no PC after install)
+
+This is the recommended workflow once the project works. The APK runs entirely on the headset; no Link, no PC, no cable.
+
+#### One-time Project Settings (Player → Android tab)
 
 | Setting | Value |
 |---|---|
-| Minimum API Level | Android 10 (API 29) |
-| Target Architecture | ARM64 only (untick ARMv7) |
-| Scripting Backend | IL2CPP |
-| Graphics API | **Vulkan only** (remove OpenGL ES 3.x) |
-| Auto Graphics API | Off |
-| Internet Access | Required (for Link streaming) |
-| Write Permission | External (SD Card) — optional |
+| Company Name | your name / org |
+| Product Name | shown on the headset's app icon (e.g. `UR3 MR Teach`) |
+| Identification → Override Default Package Name | enable + e.g. `com.yourname.ur3mrteach` |
+| Minimum API Level | Android 10 (API 29) or higher |
+| Target Architectures | **ARM64 only** (untick ARMv7 — Quest is 64-bit) |
+| Scripting Backend | **IL2CPP** |
+| Graphics API | **Vulkan** (remove OpenGL ES) |
+| Configuration | **Release** for the final APK (not Development Build) |
+
+#### One-time XR Plug-in Management (Project Settings → XR Plug-in Management → Android tab)
+
+Enable **OpenXR**, then under **OpenXR → Features** make sure these Meta Quest features are ON (already configured in this repo, but verify after first open):
+
+- Meta Quest Support
+- Meta Quest: Camera (Passthrough)
+- Meta Quest: Planes  (provider type = **Spatial Entity**)
+- Meta Quest: Raycasts
+- Meta Quest: Session
+- Meta Quest: Anchors
+
+#### Build the APK
+
+1. **File → Build Profiles** → select **Android** (install Build Support if prompted).
+2. **Add Open Scenes** (`UR3_Demo`).
+3. Click **Build And Run** to install on the connected headset immediately, **or** **Build** to save a `.apk` file you can hand off.
+
+#### Install the .apk on any Quest (without Unity)
+
+Pick one of these — the device must have Developer Mode enabled in the Meta mobile app:
+
+- **Meta Quest Developer Hub** — drag the `.apk` onto the device's app list.
+- **SideQuest** — Install APK File.
+- **adb** — `adb install -r path/to/app.apk` (Quest connected via USB-C, `adb devices` must list it).
+
+After install, put on the headset → `Library → Apps → filter "Unknown Sources"` → the app appears with its Product Name. **From here the PC is no longer needed.**
+
+#### First-launch device setup (one-time, per Quest)
+
+For Mixed-Reality surface detection (placing robots on real tables) to work you need:
+
+1. **Run Space Setup on the headset** (`Settings → Physical Space → Space Setup`) and label your room — floor, walls, **and any tables / desks** you want to land robots on.
+2. **Grant the scene permission** when the dialog appears on first launch — it asks for access to spatial data. Without it, the AR plane subsystem returns zero planes and the ghost falls back to the flat virtual floor.
 
 ---
 
-### D. Build the XR rig in the scene
+## Workflow
 
-1. Open your placement scene (`Assets/Scenes/…unity`).
-2. Menu: **`UR3 → Setup XR Rig`**  
-   This replaces `DesktopFlyCamera` with an **XR Origin** hierarchy and
-   wires `XrControllerPointer` (right controller trigger = confirm,
-   B button = cancel) to `RobotPlacementController`.
-3. **Save the scene** (`Ctrl+S`).
+### 1. Place robots
+- Toolbar **`▣ ROBOT CATALOG`** → pick a model. A translucent ghost follows the controller ray.
+- In **MR**, the ghost lands on the real surface the ray hits (floor, table, desk — anything horizontal Space Setup detected). In Desktop / VR it lands on the virtual floor.
+- **Trigger / click** → fine-tune **X / Y / Z / Yaw** in a panel that floats to the right of your gaze.
+- **CONFIRM** → the real robot spawns and its own teach pendant appears beside it.
+- A translucent **reach disc** shows the manipulator's working area on the surface (catalogue reach × 1.3 — the usable working area is a bit larger than the bare datasheet reach).
 
-> If Unity shows "UNITY_XR_INTERACTION_TOOLKIT define missing":
-> run **`UR3 → Enable XR Scripting Define`** once, wait for recompile,
-> then run **`UR3 → Setup XR Rig`** again.
+### 2. Move or delete a placed robot
+- Click any placed robot in Idle to re-open the fine-tune panel.
+- Same tweak controls as the first placement, **plus** a red **DELETE ROBOT** button that destroys the robot and its pendant. Hidden during fresh placements.
+- **CONFIRM** to re-position, **CANCEL** to leave it untouched.
 
----
+### 3. Teach a TCP path (manipulator) or a floor route (mobile)
+- Toolbar **`◎ WAYPOINTS`** → pick the robot from the list. Its reach sphere appears (manipulators) or the floor becomes the work-plane (mobile).
+- A marker rides at the end of the controller ray. **Right thumbstick** pushes the marker closer / farther along the ray so you can drop points far from yourself without physically reaching.
+- **Trigger / click** to drop a point. Points outside the reach sphere are rejected with a toast.
+- **UNDO LAST** removes the most recent point. **DONE → BUILD SPLINE** finishes — a Catmull-Rom spline is drawn from the robot's current TCP through every point.
+- **RUN SIMULATION** plays it: an offline CCD inverse-kinematics solve produces a joint trajectory in one frame, then the controller writes drive targets directly. The arm tracks rigidly and stops exactly at the last point. For mobile, a go-to-goal follower drives between points.
+- **SAVE EPISODE** stores the path (robot-relative) + the recorded start joint pose to `Application.persistentDataPath/Episodes/*.json`.
 
-### E. Testing via Quest Link (no APK — fastest)
-
-1. Connect Quest 3 via USB-C (or enable **Air Link** in the headset).
-2. In the headset, open **Quest Link** and connect to this PC.
-3. Back in Unity, make sure **Standalone** platform is selected.
-4. Press **Play** in the Editor — the scene streams live to the headset.
-5. Right controller **trigger** = place / confirm; **B** = cancel.
-6. World-space UI panels work with the controller ray automatically.
-
----
-
-### F. Build standalone APK (optional)
-
-1. **File → Build Settings** → switch to **Android** (Install Build Support if
-   prompted — takes ~5 min).
-2. Click **Add Open Scenes**.
-3. Click **Build** → save `VR_Interaction.apk`.
-4. Sideload via adb:
-   ```bash
-   adb install -r VR_Interaction.apk
-   ```
-   (Quest must be connected in developer mode; `adb devices` should list it.)
+### 4. Replay an episode
+- Toolbar **`▤ EPISODES`** → pick a saved file. The robot is first returned to its recorded state (joints homed / base teleported), then the spline plays.
 
 ---
 
-### What works unchanged in VR
+## Editor menus
 
-| Feature | Status |
+Open the Unity Editor with the demo scene loaded — the **`UR3`** menu hosts every assembly command:
+
+| Command | What it does |
 |---|---|
-| World-space teach pendants | ✅ billboard faces you in VR |
-| Robot placement (catalog → ghost → confirm) | ✅ mapped to trigger / B |
-| Waypoint path + simulation | ✅ no input changes needed |
-| TCP arrow jog | ⚠ arrows render but need UI raycaster calibration (known bug) |
+| `Setup XR Rig` | Swap `DesktopFlyCamera` for an `XR Origin` + wire `XrControllerPointer` |
+| `Setup MR (AR Foundation)` | Add `ARSession`, `ARCameraManager`, `ARPlaneManager`, `ARRaycastManager` on top of the XR rig |
+| `Mode → Desktop / XR / Passthrough` | Bake the scene's starting mode |
+| `Setup Placement Scene` | Save the current robot as a prefab, build the catalog, switch the scene to placement workflow |
+| `Catalog → Add KUKA KR600` | Import the kuka_kr600 prefab and register it in the catalog |
+| `Catalog → Add Scout V2` | Same for the Scout V2 mobile base |
+| `Catalog → Fix Robot Prefabs (URP + drives)` | Convert imported `.dae` materials from the magenta Standard shader to URP/Lit and stiffen drive gains |
 
 ---
 
-## Stage 3 — More robots (KUKA KR600 + Scout V2)
+## Notes & design decisions
 
-The catalog is now type-aware: each entry is either a **Manipulator** (joint
-pendant + TCP waypoints, like UR3) or a **Mobile** base (drive pendant + floor
-waypoints). Two new models ship:
+- **No magic constants — except one.** Manipulator reach radius shown in the placement disc and used to validate waypoints is `entry.reachRadius × PlacedRobot.WorkAreaScale` (1.3). The factor lives on `PlacedRobot.WorkAreaScale`; tune it in code if the working area should match the datasheet exactly.
+- **MR floor collider.** Passthrough hides the virtual `Ground` so the real room shows through — which also removes its collider. `RigModeManager.EnsureMrFloor` adds an invisible `BoxCollider` at `groundY` so dynamic robots (Scout) don't fall through. Only active in MR.
+- **Multi-root articulations.** UR3's URDF lands with two `isRoot` ArticulationBodies (`base_link_inertia` + a stray fixed `base` frame, both children of an AB-less `base_link`). `RobotPlacementController.PlaceArticulation` teleports **every** root to its post-move world pose — single-root robots (KUKA) keep working.
+- **Scene permission is async.** `RigModeManager.RequestScenePermissions` requests `com.oculus.permission.USE_SCENE` and `USE_ANCHOR_API` at launch. On grant, `ApplyPassthrough()` is re-run so the plane subsystem re-queries the scene.
+- **Robots are instantiated already positioned**, and `ArticulationBody.TeleportRoot()` is re-asserted on the next physics step — immovable AB roots ignore plain transform writes once the physics scene has baked them.
+- **Pointer is abstract** (`PlacementPointer.GetRay/ConfirmPressed/CancelPressed/DepthAxis`). Desktop = mouse over camera ray, XR = right-controller transform + trigger / B / right thumbstick Y. Tools never branch on the input device.
 
-| Robot | Kind | Source | Flat URDF |
-|---|---|---|---|
-| KUKA KR 600 FORTEC (R2830) | Manipulator | `kroshu/kuka_robot_descriptions` | `Assets/RobotAssets/kuka_kr600.urdf` |
-| AgileX Scout V2 | Mobile (skid-steer) | `agilexrobotics/scout_ros` | `Assets/RobotAssets/scout_v2.urdf` |
+---
 
-### Adding them (per robot)
+## Troubleshooting
 
-1. **Import the URDF.** In the Project window open `Assets/RobotAssets/`,
-   right-click `kuka_kr600.urdf` (or `scout_v2.urdf`) →
-   **"Import Robot from Selected URDF file"** → Axis Type **Y Axis**,
-   Mesh Decomposer **VHACD** → Import. (If the `.dae` visuals fail, the
-   meshes are also shipped as `.stl`.)
-2. **Register it** with the imported robot in the open scene:
-   - **`UR3 → Catalog → Add KUKA KR600 (Manipulator)`**, or
-   - **`UR3 → Catalog → Add Scout V2 (Mobile)`**.
-   This strips the importer demo scripts, attaches the right controller,
-   saves a prefab to `Assets/RobotAssets/Prefabs/`, adds a catalog entry,
-   and clears the scene instance. (`Setup Placement Scene` no longer wipes
-   the catalog, so order doesn't matter.)
-3. **Play** → `▣ ROBOT CATALOG` → the new model is in the list. Place it
-   like any other.
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| Ghost lands only on virtual floor in MR | Space Setup not run, or scene permission not granted | Run Space Setup; reinstall and grant the permission dialog on first launch |
+| Mobile robot falls through the floor in MR | (Already fixed) An older build had no MR floor collider | Rebuild from current `master` |
+| UR3 relocate moves only the pendant | (Already fixed) UR3 has two articulation roots | Rebuild from current `master` |
+| Robots appear pink / magenta in URP | `.dae` materials imported under the legacy Standard shader | `UR3 → Catalog → Fix Robot Prefabs (URP + drives)` |
+| Passthrough shows black instead of the real room | URP HDR / Post-processing enabled on the mobile assets | `Mobile_RPAsset` HDR off; `Mobile_Renderer` post-processing off |
+| "UNITY_XR_INTERACTION_TOOLKIT define missing" | XR Interaction Toolkit not yet compiled | `UR3 → Enable XR Scripting Define`, wait for recompile, then redo `Setup XR Rig` |
 
-### KUKA KR600 — notes
-- Huge robot: ~2.83 m reach, ~3.5 m tall. The reach disc / sphere scale
-  accordingly.
-- Reuses `UR3JointController` (binds the 6 revolute joints by hierarchy
-  order — KUKA links are `link_1…link_6`), the teach pendant, and the
-  TCP-waypoint scenario tool unchanged.
+---
 
-### Scout V2 — notes (mobile)
-- **Physical skid-steer.** `MobileBaseController` velocity-drives the 4
-  wheel ArticulationBody joints; the wheels push the (non-immovable,
-  gravity-enabled) base via a high-friction contact. Differential drive:
-  `vL = v − ω·halfTrack`, `vR = v + ω·halfTrack`.
-- **Drive pendant** (`MobileHmiPanel`): a diamond of press-and-hold arrows
-  (forward / back / turn-left / turn-right), live speed read-out, speed
-  scale, protective STOP.
-- **Floor waypoints**: `◎ WAYPOINTS` → pick the Scout → click points on the
-  floor → DONE → RUN. A go-to-goal follower turns toward each point, drives
-  forward once aligned, advances within `arriveRadius`, stops after the last.
-- **Smooth start/stop.** Command ramping (`maxLinearAccel`,
-  `maxAngularAccel` on `MobileBaseController`) keeps the chassis from
-  lurching and lifting its wheels. Lower them for gentler motion.
-- **Tuning (physics needs it).**
-  - Drives straight but **backwards** → flip BOTH `leftWheelSign` and
-    `rightWheelSign` on `MobileBaseController`.
-  - **Spins in place** during a waypoint route (or manual turn goes the
-    wrong way) → flip `turnSign` on `MobileBaseController`. (This is the
-    usual cause of "it just rotates instead of driving the route".)
-  - Follows a route **backwards** → toggle `mobileHeadingInvert` on
-    `WaypointController`.
-  - Spawn height (`spawnHeightOffset ≈ 0.235`) lifts the chassis so the
-    wheels, not the body, rest on the floor.
+## License & sources
 
-### Fixing the pink/magenta robots
-`.dae` meshes import their materials with the built-in *Standard* shader,
-which renders **magenta** under URP. Run **`UR3 → Catalog → Fix Robot
-Prefabs (URP + drives)`** — it converts both prefabs' materials to URP/Lit
-(and stiffens the KUKA drives) in place. Then delete the already-placed
-robots and place them again so the updated prefab is used. (Fresh
-`Add KUKA / Add Scout` runs already apply this automatically.)
+- UR3 URDF/meshes — `ros-industrial/universal_robot` (`noetic-devel`), trimmed to ur3 only
+- KUKA KR 600 R2830 — `kroshu/kuka_robot_descriptions`, trimmed to kr600_r2830 only
+- AgileX Scout V2 — `agilexrobotics/scout_ros`, trimmed to scout_v2 only
 
-## Stage 3.1 — Saving & replaying episodes
-
-A taught waypoint path can be saved as an **episode** and replayed later,
-even after the robot has been moved.
-
-- **Save:** teach a path → **DONE — BUILD SPLINE** → in REVIEW press
-  **SAVE EPISODE**. The episode stores the robot's *recorded start state*
-  (manipulator joint angles, or the mobile base pose) plus the waypoints in
-  the robot's *base-relative* frame.
-- **Load / replay:** toolbar **`▤ EPISODES`** → pick one. The tool rebinds a
-  matching robot, **first returns it to the recorded state** (homes the arm's
-  joints / teleports the base back), and only then plays the path.
-- Because points are stored relative to the base, a relocated manipulator
-  carries its path along; the mobile base is sent back to where it was taught
-  so the route reproduces exactly.
-- Files live as JSON in `Application.persistentDataPath/Episodes/` (works in
-  the Editor and in builds), one file per episode.
-
-## Notes / design decisions
-
-- The `noetic-devel` branch ships **xacro**, not flat URDF. `ur3.urdf` was
-  generated faithfully from `config/ur3/{default_kinematics,joint_limits,
-  physical_parameters,visual_parameters}.yaml` + `urdf/inc/ur_macro.xacro`.
-- Joints are position-controlled `ArticulationBody` drives. Gravity on the
-  links is disabled by default (`UR3JointController.disableGravity`) so the
-  arm holds any pose; turn it off for full dynamics later.
-- The HMI is a **world-space** uGUI canvas on purpose — the identical panel
-  will work when the XR rig replaces `DesktopFlyCamera`.
-- Stage 2 (next): swap the desktop rig for XR Interaction Toolkit + XR Device
-  Simulator, then Meta XR SDK for Quest 3 / MR.
-
-## Git / GitHub
-
-`.gitignore` and `.gitattributes` (Git LFS for `*.stl/*.dae/*.fbx/...`) are
-in place. When ready to publish:
-
-```bash
-git init
-git lfs install
-git add .gitattributes .gitignore
-git add .
-git commit -m "Stage 1: UR3 URDF digital twin + teach-pendant HMI"
-```
+Each upstream package retains its original license inside its folder.
