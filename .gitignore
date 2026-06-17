@@ -54,3 +54,7 @@ sysinfo.txt
 # OS
 .DS_Store
 Thumbs.db
+
+# Python service caches
+__pycache__/
+*.py[cod]

@@ -1,0 +1,78 @@
+services:
+  downloader:
+    image: python:3.11-slim
+    profiles: ["download"]
+    working_dir: /work
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+      HF_XET_HIGH_PERFORMANCE: ${HF_XET_HIGH_PERFORMANCE:-1}
+      VLM_MODEL_ID: ${VLM_MODEL_ID:-Qwen/Qwen3-VL-8B-Instruct-FP8}
+    volumes:
+      - ${MODEL_DIR:-./models/qwen3-vl-8b-instruct-fp8}:/models/qwen3-vl
+    command: >
+      sh -lc "pip install --no-cache-dir -U huggingface_hub[hf_xet]
+      && hf download \"$${VLM_MODEL_ID}\"
+      --local-dir /models/qwen3-vl
+      --local-dir-use-symlinks False"
+
+  vllm:
+    image: ${VLLM_IMAGE:-vllm/vllm-openai:latest}
+    ipc: host
+    shm_size: 16g
+    gpus: all
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+      VLLM_WORKER_MULTIPROC_METHOD: spawn
+      VLLM_LOGGING_LEVEL: ${VLLM_LOGGING_LEVEL:-INFO}
+    volumes:
+      - ${MODEL_DIR:-./models/qwen3-vl-8b-instruct-fp8}:/models/qwen3-vl:ro
+      - ${HF_CACHE_DIR:-./hf_cache}:/root/.cache/huggingface
+    ports:
+      - "${VLLM_PORT:-8000}:8000"
+    command:
+      - /models/qwen3-vl
+      - --served-model-name
+      - ${VLM_MODEL_NAME:-Qwen/Qwen3-VL-8B-Instruct-FP8}
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --dtype
+      - auto
+      - --max-model-len
+      - "${VLLM_MAX_MODEL_LEN:-8192}"
+      - --gpu-memory-utilization
+      - "${VLLM_GPU_MEMORY_UTILIZATION:-0.88}"
+      - --limit-mm-per-prompt
+      - '{"image":1}'
+      - --trust-remote-code
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/v1/models', timeout=5).read()"]
+      interval: 20s
+      timeout: 10s
+      retries: 30
+      start_period: 120s
+
+  gateway:
+    build:
+      context: ../..
+      dockerfile: server/deploy/Dockerfile
+    environment:
+      ROBOT_AI_MODE: openai_compatible
+      ROBOT_AI_BASE_URL: http://vllm:8000/v1
+      ROBOT_AI_MODEL: ${VLM_MODEL_NAME:-Qwen/Qwen3-VL-8B-Instruct-FP8}
+      ROBOT_AI_API_KEY: ${ROBOT_AI_API_KEY:-}
+      ROBOT_AI_MODEL_TIMEOUT_S: ${ROBOT_AI_MODEL_TIMEOUT_S:-240}
+      ROBOT_AI_MAX_TOKENS: ${ROBOT_AI_MAX_TOKENS:-512}
+      ROBOT_AI_ASR_MODE: ${ROBOT_AI_ASR_MODE:-disabled}
+      ROBOT_AI_ASR_BASE_URL: ${ROBOT_AI_ASR_BASE_URL:-http://vllm:8000/v1}
+      ROBOT_AI_ASR_MODEL: ${ROBOT_AI_ASR_MODEL:-}
+      ROBOT_AI_ASR_API_KEY: ${ROBOT_AI_ASR_API_KEY:-}
+    volumes:
+      - ../robot_ai:/app/server/robot_ai:ro
+      - ../__init__.py:/app/server/__init__.py:ro
+    ports:
+      - "${GATEWAY_PORT:-8080}:8080"
+    depends_on:
+      vllm:
+        condition: service_healthy
