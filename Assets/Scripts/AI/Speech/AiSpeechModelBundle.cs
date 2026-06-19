@@ -63,4 +63,60 @@ namespace VRInteraction.AI.Speech
                     right.TrimStart('/', '\\')).Replace('\\', '/');
         }
     }
+
+    [Serializable]
+    public class AiTtsModelBundle
+    {
+        public const string RecommendedTtsBundleId = "piper-en_US-lessac-medium";
+        public const string RecommendedTtsModel = "rhasspy/piper-voices/en_US-lessac-medium";
+
+        public string bundle_id = RecommendedTtsBundleId;
+        public string source_model = RecommendedTtsModel;
+        public string language = "en-US";
+        public int sample_rate_hz = 22050;
+        public string streaming_assets_root = "TTS/piper-en_US-lessac-medium";
+        public string model_file = "en_US-lessac-medium.onnx";
+        public string config_file = "en_US-lessac-medium.onnx.json";
+
+        public string ModelRelativePath =>
+            CombineRelative(streaming_assets_root, model_file);
+
+        public string ConfigRelativePath =>
+            CombineRelative(streaming_assets_root, config_file);
+
+        public string[] RequiredStreamingAssetRelativePaths()
+        {
+            return new[] { ModelRelativePath, ConfigRelativePath };
+        }
+
+        public bool ValidateStreamingAssets(out string error)
+        {
+            foreach (string relativePath in RequiredStreamingAssetRelativePaths())
+            {
+                string absolutePath = Path.Combine(
+                    Application.streamingAssetsPath, relativePath);
+                if (!File.Exists(absolutePath))
+                {
+                    error = "Missing TTS model asset: StreamingAssets/" +
+                            relativePath;
+                    return false;
+                }
+            }
+
+            error = null;
+            return true;
+        }
+
+        public string Describe()
+        {
+            return $"{bundle_id} ({source_model}, {language}, " +
+                   $"{sample_rate_hz} Hz)";
+        }
+
+        private static string CombineRelative(string left, string right)
+        {
+            return (left.TrimEnd('/', '\\') + "/" +
+                    right.TrimStart('/', '\\')).Replace('\\', '/');
+        }
+    }
 }

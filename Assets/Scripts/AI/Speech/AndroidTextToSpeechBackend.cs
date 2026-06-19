@@ -5,6 +5,7 @@ namespace VRInteraction.AI.Speech
     public class AndroidTextToSpeechBackend : IAiTtsBackend
     {
         private AndroidJavaObject _tts;
+        private AndroidJavaObject _activity;
         private bool _available;
 
         public string BackendName => "android_text_to_speech";
@@ -18,12 +19,15 @@ namespace VRInteraction.AI.Speech
                 using (var unityPlayer = new AndroidJavaClass(
                            "com.unity3d.player.UnityPlayer"))
                 {
-                    var activity = unityPlayer.GetStatic<AndroidJavaObject>(
+                    _activity = unityPlayer.GetStatic<AndroidJavaObject>(
                         "currentActivity");
-                    _tts = new AndroidJavaObject(
-                        "android.speech.tts.TextToSpeech",
-                        activity,
-                        new InitListener(this));
+                    _activity.Call("runOnUiThread", new AndroidJavaRunnable(() =>
+                    {
+                        _tts = new AndroidJavaObject(
+                            "android.speech.tts.TextToSpeech",
+                            _activity,
+                            new InitListener(this));
+                    }));
                 }
             }
             catch (System.Exception e)
@@ -40,16 +44,20 @@ namespace VRInteraction.AI.Speech
         {
             if (string.IsNullOrEmpty(text)) return;
 #if UNITY_ANDROID && !UNITY_EDITOR
-            if (_tts == null || !_available)
+            if (_tts == null || _activity == null || !_available)
             {
                 Debug.Log("[RobotAI] TTS unavailable: " + text);
                 return;
             }
 
-            using (var hashMap = new AndroidJavaObject("java.util.HashMap"))
+            string utteranceId = "robot_ai_" + Time.frameCount;
+            _activity.Call("runOnUiThread", new AndroidJavaRunnable(() =>
             {
-                _tts.Call<int>("speak", text, 0, hashMap);
-            }
+                using (var bundle = new AndroidJavaObject("android.os.Bundle"))
+                {
+                    _tts.Call<int>("speak", text, 0, bundle, utteranceId);
+                }
+            }));
 #else
             Debug.Log("[RobotAI:TTS] " + text);
 #endif
@@ -64,6 +72,11 @@ namespace VRInteraction.AI.Speech
                 _tts.Call("shutdown");
                 _tts.Dispose();
                 _tts = null;
+            }
+            if (_activity != null)
+            {
+                _activity.Dispose();
+                _activity = null;
             }
 #endif
         }
@@ -83,6 +96,15 @@ namespace VRInteraction.AI.Speech
             public void onInit(int status)
             {
                 _owner.SetAvailable(status == 0);
+                if (status == 0)
+                {
+                    using (var locale = new AndroidJavaClass("java.util.Locale"))
+                    {
+                        var us = locale.GetStatic<AndroidJavaObject>("US");
+                        _owner._tts.Call<int>("setLanguage", us);
+                    }
+                    _owner._tts.Call<int>("setSpeechRate", 1.0f);
+                }
             }
         }
     }

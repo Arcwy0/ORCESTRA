@@ -32,6 +32,7 @@ namespace VRInteraction.AI
         public bool useEditorMockAsrFallback = true;
         public string editorMockTranscript = "test test test";
         public AiSpeechModelBundle speechModelBundle = new AiSpeechModelBundle();
+        public AiTtsModelBundle ttsModelBundle = new AiTtsModelBundle();
 #if UNITY_AI_INFERENCE
         public ModelAsset whisperLogMel;
         public ModelAsset whisperEncoder;
@@ -175,6 +176,8 @@ namespace VRInteraction.AI
             timer.Stop();
             Debug.Log($"[RobotAI] AI response latency: {timer.ElapsedMilliseconds} ms");
 
+            ApplyTranscriptFromDiagnostics(response);
+
             if (response != null && response.error != null &&
                 !string.IsNullOrEmpty(response.error.message))
             {
@@ -264,12 +267,9 @@ namespace VRInteraction.AI
                 _pendingAudioWav = wav;
                 SetStatus($"Recorded {_pendingAudioSeconds:0.0}s audio.");
                 if (asrBackendMode == AiAsrBackendMode.OnDeviceWhisperSentis ||
-                    asrBackendMode == AiAsrBackendMode.NativePlugin)
+                    asrBackendMode == AiAsrBackendMode.NativePlugin ||
+                    asrBackendMode == AiAsrBackendMode.ServerGateway)
                     StartCoroutine(TranscribePendingAudio());
-                else if (asrBackendMode == AiAsrBackendMode.ServerGateway)
-                    SetStatus($"Recorded {_pendingAudioSeconds:0.0}s audio. " +
-                              "Press SEND to use server ASR; local text " +
-                              "will not change without an ASR backend.");
                 return;
             }
 
@@ -343,6 +343,12 @@ namespace VRInteraction.AI
 
         private IEnumerator TranscribePendingAudio()
         {
+            if (asrBackendMode == AiAsrBackendMode.ServerGateway)
+            {
+                yield return TranscribePendingAudioWithServer();
+                yield break;
+            }
+
             bool needsWav = !(_asrBackend is IAiLiveAsrBackend);
             if (needsWav &&
                 (_pendingAudioWav == null || _pendingAudioWav.Length == 0))
@@ -367,6 +373,50 @@ namespace VRInteraction.AI
                 : " (mock fallback after: " + _liveAsrStartError + ")";
             _liveAsrStartError = null;
             SetStatus("ASR: " + result.text + note);
+        }
+
+        private IEnumerator TranscribePendingAudioWithServer()
+        {
+            if (_pendingAudioWav == null || _pendingAudioWav.Length == 0)
+                yield break;
+
+            SetStatus("Running server ASR...");
+            AiTranscribeResponse response = null;
+            string error = null;
+            commandClient.serverUrl = serverUrl;
+            commandClient.useLocalMock = false;
+            yield return commandClient.TranscribeAudio(
+                _pendingAudioWav,
+                (r, e) => { response = r; error = e; });
+
+            if (!string.IsNullOrEmpty(error))
+            {
+                SetStatus("Server ASR failed: " + error +
+                          ". Audio will be sent with SEND.");
+                yield break;
+            }
+
+            if (response != null && response.error != null &&
+                !string.IsNullOrEmpty(response.error.message))
+            {
+                SetStatus("Server ASR unavailable: " +
+                          response.error.message +
+                          ". Audio will be sent with SEND.");
+                yield break;
+            }
+
+            string text = response != null ? response.text : "";
+            if (string.IsNullOrEmpty(text))
+            {
+                SetStatus("Server ASR returned empty text. Audio will be sent with SEND.");
+                yield break;
+            }
+
+            if (_input != null) _input.text = text;
+            debugCommand = text;
+            _pendingAudioWav = null;
+            _pendingAudioSeconds = 0f;
+            SetStatus("ASR: " + text);
         }
 
         private void BuildUi()
@@ -463,6 +513,18 @@ namespace VRInteraction.AI
             Debug.Log("[RobotAI] " + text);
         }
 
+        private void ApplyTranscriptFromDiagnostics(AiCommandResponse response)
+        {
+            if (response == null || response.diagnostics == null ||
+                string.IsNullOrEmpty(response.diagnostics.transcript_text))
+                return;
+
+            string text = response.diagnostics.transcript_text;
+            if (_input != null) _input.text = text;
+            debugCommand = text;
+            Debug.Log("[RobotAI] Server ASR transcript: " + text);
+        }
+
         private static void MarkRejection(AiCommandResponse response, string reason)
         {
             if (response == null) return;
@@ -507,6 +569,9 @@ namespace VRInteraction.AI
 
         private IAiTtsBackend CreateTtsBackend()
         {
+            if (ttsBackendMode == AiTtsBackendMode.NativePlugin ||
+                ttsBackendMode == AiTtsBackendMode.PiperNativePlugin)
+                return new PiperNativeTtsBackend(ttsModelBundle);
             if (ttsBackendMode == AiTtsBackendMode.AndroidTextToSpeech)
                 return new AndroidTextToSpeechBackend();
             return new AndroidTextToSpeechBackend();

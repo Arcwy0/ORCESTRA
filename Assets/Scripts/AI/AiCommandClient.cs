@@ -143,6 +143,56 @@ namespace VRInteraction.AI
             yield return Send(request, image, null, done);
         }
 
+        public IEnumerator TranscribeAudio(
+            byte[] audioWav,
+            Action<AiTranscribeResponse, string> done)
+        {
+            if (audioWav == null || audioWav.Length == 0)
+            {
+                done(null, "No audio recorded.");
+                yield break;
+            }
+
+            string endpoint = BuildTranscribeEndpoint(serverUrl);
+            var payload = new AiAudioTranscribeJsonPayload
+            {
+                audio_wav_base64 = Convert.ToBase64String(audioWav)
+            };
+            string payloadJson = JsonUtility.ToJson(payload);
+            byte[] body = System.Text.Encoding.UTF8.GetBytes(payloadJson);
+
+            Debug.Log($"[RobotAI] POST {endpoint} timeout={timeoutSeconds}s " +
+                      $"transport=json audio={audioWav.Length}B");
+
+            using (var www = new UnityWebRequest(endpoint, UnityWebRequest.kHttpVerbPOST))
+            {
+                www.timeout = timeoutSeconds;
+                www.uploadHandler = new UploadHandlerRaw(body);
+                www.downloadHandler = new DownloadHandlerBuffer();
+                www.SetRequestHeader("Content-Type", "application/json");
+                yield return www.SendWebRequest();
+
+                if (www.result != UnityWebRequest.Result.Success)
+                {
+                    done(null, www.error + " http=" + www.responseCode +
+                               ": " + www.downloadHandler.text);
+                    yield break;
+                }
+
+                try
+                {
+                    var response = JsonUtility.FromJson<AiTranscribeResponse>(
+                        www.downloadHandler.text);
+                    done(response, null);
+                }
+                catch (Exception e)
+                {
+                    done(null, "Invalid ASR response JSON: " + e.Message +
+                               " raw=" + www.downloadHandler.text);
+                }
+            }
+        }
+
         private static AiCommandResponse MockResponse(AiCommandRequest request)
         {
             string robotId = request.robots != null && request.robots.Length > 0
@@ -212,11 +262,32 @@ namespace VRInteraction.AI
             return AiModelUtil.Vec3(center + new Vector3(offset, 0f, 0f));
         }
 
+        private static string BuildTranscribeEndpoint(string url)
+        {
+            if (string.IsNullOrEmpty(url))
+                return "";
+            if (url.EndsWith("/v1/audio/transcribe_json"))
+                return url;
+            if (url.EndsWith("/v1/robot/command_json"))
+                return url.Substring(0, url.Length - "/v1/robot/command_json".Length) +
+                       "/v1/audio/transcribe_json";
+            if (url.EndsWith("/v1/robot/command"))
+                return url.Substring(0, url.Length - "/v1/robot/command".Length) +
+                       "/v1/audio/transcribe_json";
+            return url.TrimEnd('/') + "/v1/audio/transcribe_json";
+        }
+
         [Serializable]
         private class AiCommandJsonPayload
         {
             public AiCommandRequest request;
             public string image_png_base64;
+            public string audio_wav_base64;
+        }
+
+        [Serializable]
+        private class AiAudioTranscribeJsonPayload
+        {
             public string audio_wav_base64;
         }
     }

@@ -5,7 +5,8 @@
 Use this bundle for the first Quest 3/3S implementation:
 
 - ASR: `openai/whisper-tiny.en`, exported to Unity AI Inference / Sentis assets.
-- TTS: Android platform `android.speech.tts.TextToSpeech`.
+- TTS: Piper `en_US-lessac-medium` packaged in Unity
+  `StreamingAssets`, with Android platform `TextToSpeech` as fallback.
 - Audio input: push-to-talk, mono WAV, 16 kHz, 16-bit PCM.
 - Runtime target: standalone Quest APK.
 
@@ -18,8 +19,9 @@ Rationale:
   latency/size tradeoff for initial English-only testing.
 - Quest CPU/GPU budget should remain available for MR rendering, passthrough,
   robot preview, validation, and networking.
-- Android TTS avoids bundling a second native model stack before ASR accuracy is
-  measured.
+- Piper keeps speech synthesis on the Quest application side instead of the VLM
+  server. Android TTS remains the fallback when the native Piper plugin is not
+  installed.
 
 If Russian or multilingual commands become required, replace ASR with Whisper
 `tiny` multilingual and keep the same Unity-side interface.
@@ -41,6 +43,19 @@ Assets/StreamingAssets/ASR/whisper-tiny-en/AudioDecoder_Tiny.sentis
 Assets/StreamingAssets/ASR/whisper-tiny-en/vocab.json
 ```
 
+Place the Unity-side TTS assets under:
+
+```text
+Assets/StreamingAssets/TTS/piper-en_US-lessac-medium/en_US-lessac-medium.onnx
+Assets/StreamingAssets/TTS/piper-en_US-lessac-medium/en_US-lessac-medium.onnx.json
+```
+
+Download them with:
+
+```powershell
+.\tools\download_unity_tts_model.ps1
+```
+
 Also assign the three `.sentis` files and `vocab.json` to
 `RobotAiController` in the Unity Inspector:
 
@@ -49,9 +64,9 @@ Also assign the three `.sentis` files and `vocab.json` to
 - `Whisper Decoder`
 - `Whisper Vocab Json`
 
-The current project intentionally does not include model weights. Export and
-copy the bundle on the server or a model-prep workstation, then commit only if
-the repository is intended to store binary model artifacts.
+The current project includes the Piper TTS voice under `StreamingAssets`. ASR
+weights are still not included; export/copy the Whisper Sentis bundle on the
+server or a model-prep workstation.
 
 ## Implemented Now
 
@@ -59,6 +74,8 @@ the repository is intended to store binary model artifacts.
 - PCM16 WAV decoder for on-device ASR input.
 - WAV upload to the robot-AI server when using server-side ASR/VLM.
 - Android TextToSpeech backend for Quest speech replies.
+- Piper Unity-side model bundle metadata and native-plugin backend wrapper.
+- Piper `en_US-lessac-medium` voice files under `StreamingAssets/TTS`.
 - Speech backend selection in `RobotAiController`.
 - Recommended ASR bundle manifest and readiness metadata.
 - Inspector slots for Sentis Whisper log-mel, encoder, decoder, and vocab.
@@ -90,6 +107,32 @@ or another ASR service before prompt grounding.
 
 This is the recommended path until on-device ASR latency and accuracy are
 measured.
+
+## Native Plugin Requirement
+
+`PiperNativeTtsBackend` expects an Android class:
+
+```text
+com.orcestra.tts.PiperTtsPlugin
+```
+
+with a static factory:
+
+```text
+create(Activity activity, String modelAssetPath, String configAssetPath)
+```
+
+and instance methods:
+
+```text
+speak(String text)
+shutdown()
+```
+
+The plugin should load the two Piper files from Unity `StreamingAssets` via
+Android `AssetManager` or copy them to app-local storage, then run ONNX Runtime
+plus Piper/eSpeak phonemization on-device. If the plugin is absent, the backend
+falls back to Android TextToSpeech so speech still works during tests.
 
 ## Future Native Bundle Alternative
 

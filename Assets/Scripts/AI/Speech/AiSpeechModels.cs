@@ -15,7 +15,8 @@ namespace VRInteraction.AI.Speech
     {
         AndroidTextToSpeech,
         UnityAudioClip,
-        NativePlugin
+        NativePlugin,
+        PiperNativePlugin
     }
 
     [Serializable]

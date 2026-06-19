@@ -228,7 +228,9 @@ Speech:
 
 - `Enable Speech`: enables `REC` and TTS.
 - `Asr Backend Mode`:
-  - `ServerGateway`: records WAV and sends it with the next request.
+  - `ServerGateway`: records WAV, calls the server ASR endpoint immediately
+    after recording stops, and writes the transcript into the command field.
+    If ASR fails, the WAV is kept and sent with the next request as fallback.
   - `OnDeviceWhisperSentis`: transcribes on Quest/Unity through Sentis Whisper.
   - `NativePlugin`: reserved for future sherpa-onnx/native Android plugin.
   - `WindowsDictation`: Windows Editor/standalone local dictation backend.
@@ -243,6 +245,9 @@ Speech:
   `test test test`.
 - `Tts Backend Mode`:
   - `AndroidTextToSpeech`: current Quest output backend.
+  - `PiperNativePlugin`: Unity-side packaged Piper voice under
+    `Assets/StreamingAssets/TTS/piper-en_US-lessac-medium`; falls back to
+    Android TextToSpeech if the native plugin is absent.
   - other enum values currently fall back to Android TTS.
 - `Record Sample Rate Hz`: keep `16000`.
 - `Max Record Seconds`: default `10`.
@@ -506,8 +511,60 @@ Speech input test with server ASR:
 2. Set `Use Local Mock = false`. This disables the Windows Editor dictation
    fallback and sends WAV to the server.
 3. Point `Server Url` to reachable server IP.
-4. Press `REC`, speak, press `REC`, then `SEND`.
-5. Expected: WAV reaches gateway.
+4. Press `REC`, speak, press `REC`.
+5. Expected: Unity calls `/v1/audio/transcribe_json` and the command text field
+   changes to the transcript.
+6. Press `SEND`.
+7. Expected: VLM request uses the visible transcript text.
+
+Server `.env` for local ASR:
+
+```text
+ROBOT_AI_ASR_MODE=faster_whisper
+ROBOT_AI_ASR_MODEL_DIR_HOST=/workspace/models/asr/faster-whisper-base.en
+ROBOT_AI_ASR_DEVICE=cpu
+ROBOT_AI_ASR_COMPUTE_TYPE=int8
+```
+
+Download the model:
+
+```bash
+cd /workspace/orcestra_robot_ai/server/deploy
+docker compose --profile download-speech run --rm speech-downloader
+```
+
+Unity-side local TTS:
+
+TTS is not configured on the server. Unity owns TTS.
+
+For packaged model-based TTS in Unity:
+
+```powershell
+.\tools\download_unity_tts_model.ps1
+```
+
+This writes:
+
+```text
+Assets/StreamingAssets/TTS/piper-en_US-lessac-medium/en_US-lessac-medium.onnx
+Assets/StreamingAssets/TTS/piper-en_US-lessac-medium/en_US-lessac-medium.onnx.json
+```
+
+Then set:
+
+```text
+Tts Backend Mode = PiperNativePlugin
+```
+
+Runtime synthesis requires the Android Piper native plugin. Until that plugin
+is present, use `AndroidTextToSpeech` for working Quest audio.
+
+Saved screenshots:
+
+```text
+/workspace/outputs/robot_ai/*_raw.png
+/workspace/outputs/robot_ai/*_annotated.png
+```
 
 Speech input test with Sentis ASR:
 

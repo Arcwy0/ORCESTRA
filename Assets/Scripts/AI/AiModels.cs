@@ -142,7 +142,17 @@ namespace VRInteraction.AI
         public float asr_latency_ms;
         public int audio_bytes;
         public string transcript_text;
+        public string saved_image_path;
+        public string saved_annotated_image_path;
         public string rejection_reason;
+    }
+
+    [Serializable]
+    public class AiTranscribeResponse
+    {
+        public string text;
+        public AiDiagnostics diagnostics;
+        public AiError error;
     }
 
     public static class AiModelUtil
