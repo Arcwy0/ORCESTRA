@@ -176,7 +176,53 @@ ROBOT_AI_ASR_BASE_URL=http://<asr-host>:<port>/v1
 ROBOT_AI_ASR_MODEL=<model-name>
 ```
 
-## 10. Useful Commands
+Recommended local server ASR:
+
+```bash
+docker compose --profile download-speech run --rm speech-downloader
+```
+
+Then set in `.env`:
+
+```text
+ROBOT_AI_ASR_MODE=faster_whisper
+ROBOT_AI_ASR_MODEL_DIR_HOST=/workspace/models/asr/faster-whisper-base.en
+ROBOT_AI_ASR_DEVICE=cpu
+ROBOT_AI_ASR_COMPUTE_TYPE=int8
+```
+
+Unity calls `/v1/audio/transcribe_json` when recording stops, so the menu text
+changes before the VLM request is sent.
+
+## 10. TTS
+
+TTS is Unity-side, not server-side. The gateway returns only `spoken_reply`.
+Use either Android TextToSpeech on Quest or package a Piper voice in:
+
+```text
+Assets/StreamingAssets/TTS/piper-en_US-lessac-medium
+```
+
+Then set Unity `RobotAiController -> Tts Backend Mode` to
+`PiperNativePlugin`.
+
+## 11. Saved Screenshots
+
+By default:
+
+```text
+ROBOT_AI_SAVE_IMAGES=1
+ROBOT_AI_OUTPUT_DIR_HOST=/workspace/outputs/robot_ai
+```
+
+The gateway writes raw and annotated images:
+
+```text
+/workspace/outputs/robot_ai/*_raw.png
+/workspace/outputs/robot_ai/*_annotated.png
+```
+
+## 12. Useful Commands
 
 Stop:
 
@@ -203,7 +249,7 @@ Restart vLLM after changing `.env`:
 docker compose up --force-recreate vllm gateway
 ```
 
-## 11. Ports
+## 13. Ports
 
 - vLLM OpenAI API: `8000`
 - FastAPI robot gateway: `8080`
@@ -232,7 +278,7 @@ Then set:
 Server Url = http://127.0.0.1:18080/v1/robot/command
 ```
 
-## 12. Source Notes
+## 14. Source Notes
 
 vLLM exposes an OpenAI-compatible server and supports Docker deployment. The
 Qwen model cards provide vLLM/SGLang launch examples. The gateway is intentionally

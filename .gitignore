@@ -58,3 +58,9 @@ Thumbs.db
 # Python service caches
 __pycache__/
 *.py[cod]
+
+# Local/server model weights and generated AI traces
+[Mm]odels/
+server/deploy/models/
+server/deploy/outputs/
+outputs/

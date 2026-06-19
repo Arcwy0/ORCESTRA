@@ -7,6 +7,7 @@ namespace VRInteraction.AI
     public class AiPlanValidator
     {
         public float minGroundingConfidence = 0.6f;
+        public float reachToleranceMeters = 0.03f;
 
         public bool Validate(AiCommandResponse response, out string error)
         {
@@ -138,7 +139,8 @@ namespace VRInteraction.AI
                     error = "Plan contains a non-finite waypoint.";
                     return false;
                 }
-                if (Vector3.Distance(p, reachCenter) > robot.reachRadius)
+                if (Vector3.Distance(p, reachCenter) >
+                    robot.reachRadius + reachToleranceMeters)
                 {
                     error = "Target is outside manipulator reach.";
                     return false;

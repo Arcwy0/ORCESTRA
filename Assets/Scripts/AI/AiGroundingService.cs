@@ -47,6 +47,7 @@ namespace VRInteraction.AI
             response.plan_ir.kind = "manipulator_reach";
             Vector3 standoff = target + Vector3.up *
                 Mathf.Max(0.05f, response.plan_ir.min_clearance_m);
+            standoff = ClampToReach(robot, standoff);
             response.plan_ir.waypoints = new[]
             {
                 new AiWaypoint { position_m = AiModelUtil.Vec3(standoff) }
@@ -250,6 +251,21 @@ namespace VRInteraction.AI
         {
             var ground = GameObject.Find("Ground");
             return ground != null ? ground.transform.position.y : 0f;
+        }
+
+        private static Vector3 ClampToReach(PlacedRobot robot, Vector3 point)
+        {
+            if (robot == null || robot.kind == RobotKind.Mobile ||
+                robot.reachRadius <= 0f)
+                return point;
+
+            Vector3 center = robot.transform.TransformPoint(
+                robot.reachCenterLocal);
+            Vector3 delta = point - center;
+            float maxRadius = Mathf.Max(robot.reachRadius * 0.98f, 0.05f);
+            if (delta.magnitude <= maxRadius || delta.sqrMagnitude < 1e-8f)
+                return point;
+            return center + delta.normalized * maxRadius;
         }
     }
 }

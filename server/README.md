@@ -124,3 +124,52 @@ Expected result:
 Current Unity tests should use `/v1/robot/command_json` through the client
 default JSON transport because it is more reliable in Unity Editor and Quest
 builds.
+
+## Server ASR
+
+Download the recommended ASR weights on the GPU server:
+
+```bash
+cd /workspace/orcestra_robot_ai/server/deploy
+docker compose --profile download-speech run --rm speech-downloader
+```
+
+This writes:
+
+```text
+/workspace/models/asr/faster-whisper-base.en
+```
+
+Enable server ASR in `.env`:
+
+```text
+ROBOT_AI_ASR_MODE=faster_whisper
+ROBOT_AI_ASR_MODEL_DIR_HOST=/workspace/models/asr/faster-whisper-base.en
+ROBOT_AI_ASR_DEVICE=cpu
+ROBOT_AI_ASR_COMPUTE_TYPE=int8
+```
+
+Unity `ServerGateway` ASR now calls `/v1/audio/transcribe_json` immediately
+after recording stops and writes the transcript into the command input field.
+
+TTS is intentionally not server-side. Unity speaks `spoken_reply` locally.
+For packaged model-based TTS, put the Piper voice under
+`Assets/StreamingAssets/TTS/piper-en_US-lessac-medium` and set
+`Tts Backend Mode = PiperNativePlugin` in `RobotAiController`.
+
+## Saved Images
+
+The gateway saves every received screenshot by default:
+
+```text
+/workspace/outputs/robot_ai/*_raw.png
+/workspace/outputs/robot_ai/*_annotated.png
+```
+
+The annotated image includes returned bounding boxes and preferred image points
+when the VLM provides them. Paths are also returned in response diagnostics:
+
+```text
+diagnostics.saved_image_path
+diagnostics.saved_annotated_image_path
+```

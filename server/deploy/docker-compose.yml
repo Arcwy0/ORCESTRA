@@ -15,6 +15,22 @@ services:
       --local-dir /models/qwen3-vl
       --local-dir-use-symlinks False"
 
+  speech-downloader:
+    image: python:3.11-slim
+    profiles: ["download-speech"]
+    working_dir: /work
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+      HF_XET_HIGH_PERFORMANCE: ${HF_XET_HIGH_PERFORMANCE:-1}
+      ROBOT_AI_ASR_MODEL_ID: ${ROBOT_AI_ASR_MODEL_ID:-Systran/faster-whisper-base.en}
+      ROBOT_AI_ASR_MODEL_DIR: /models/asr/faster-whisper-base.en
+    volumes:
+      - ${ROBOT_AI_ASR_MODEL_DIR_HOST:-./models/asr/faster-whisper-base.en}:/models/asr/faster-whisper-base.en
+      - ./scripts:/work/scripts:ro
+    command: >
+      sh -lc "pip install --no-cache-dir -U huggingface_hub[hf_xet]
+      && python /work/scripts/download_speech_models.py"
+
   vllm:
     image: ${VLLM_IMAGE:-vllm/vllm-openai:latest}
     ipc: host
@@ -68,9 +84,16 @@ services:
       ROBOT_AI_ASR_BASE_URL: ${ROBOT_AI_ASR_BASE_URL:-http://vllm:8000/v1}
       ROBOT_AI_ASR_MODEL: ${ROBOT_AI_ASR_MODEL:-}
       ROBOT_AI_ASR_API_KEY: ${ROBOT_AI_ASR_API_KEY:-}
+      ROBOT_AI_ASR_MODEL_DIR: ${ROBOT_AI_ASR_MODEL_DIR:-/models/asr/faster-whisper-base.en}
+      ROBOT_AI_ASR_DEVICE: ${ROBOT_AI_ASR_DEVICE:-cpu}
+      ROBOT_AI_ASR_COMPUTE_TYPE: ${ROBOT_AI_ASR_COMPUTE_TYPE:-int8}
+      ROBOT_AI_SAVE_IMAGES: ${ROBOT_AI_SAVE_IMAGES:-1}
+      ROBOT_AI_OUTPUT_DIR: /workspace/outputs/robot_ai
     volumes:
       - ../robot_ai:/app/server/robot_ai:ro
       - ../__init__.py:/app/server/__init__.py:ro
+      - ${ROBOT_AI_ASR_MODEL_DIR_HOST:-./models/asr/faster-whisper-base.en}:/models/asr/faster-whisper-base.en:ro
+      - ${ROBOT_AI_OUTPUT_DIR_HOST:-./outputs/robot_ai}:/workspace/outputs/robot_ai
     ports:
       - "${GATEWAY_PORT:-8080}:8080"
     depends_on:

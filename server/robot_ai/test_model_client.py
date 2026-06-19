@@ -11,6 +11,7 @@ if HAS_PYDANTIC:
     from server.robot_ai.model_client import make_response
     from server.robot_ai.schemas import (
         CameraSnapshot,
+        KnownSceneObject,
         RobotCommandRequest,
         RobotSnapshot,
     )
@@ -113,6 +114,73 @@ class RobotAiGatewayTests(unittest.TestCase):
         self.assertEqual(
             response.diagnostics.transcript_text,
             "Move the gripper to the mock target.",
+        )
+
+    def test_known_red_cube_uses_scene_object_world_target(self):
+        request = RobotCommandRequest(
+            session_id="s",
+            command_text="Move the gripper to the red cube.",
+            image_source="unity_screenshot",
+            camera=CameraSnapshot(width=640, height=480),
+            robots=[
+                RobotSnapshot(
+                    id="UR3_TestRobot",
+                    kind="manipulator",
+                    tcp_position_m=[0.2, 0.3, 0.0],
+                    reach_center_m=[0.0, 0.18, 0.0],
+                    reach_radius_m=0.75,
+                )
+            ],
+            known_scene_objects=[
+                KnownSceneObject(
+                    id="VLM_Target_RedCube",
+                    label="red cube",
+                    position_m=[0.35, 0.05, 0.0],
+                    size_m=[0.1, 0.1, 0.1],
+                )
+            ],
+        )
+
+        response = make_response(request, image_bytes=None)
+
+        self.assertIsNone(response.error)
+        self.assertEqual(response.intent.target_ref, "red cube")
+        self.assertEqual(response.visual_grounding.world_position_m,
+                         [0.35, 0.05, 0.0])
+        self.assertEqual(response.plan_ir.kind, "manipulator_reach")
+        self.assertEqual(len(response.plan_ir.waypoints), 1)
+        self.assertAlmostEqual(
+            response.plan_ir.waypoints[0].position_m[1],
+            0.15,
+            places=4,
+        )
+
+    def test_relative_vertical_motion_uses_tcp_position(self):
+        request = RobotCommandRequest(
+            session_id="s",
+            command_text="Move the gripper vertically up by 30 centimeters.",
+            image_source="unity_screenshot",
+            camera=CameraSnapshot(width=640, height=480),
+            robots=[
+                RobotSnapshot(
+                    id="UR3_TestRobot",
+                    kind="manipulator",
+                    tcp_position_m=[0.2, 0.3, 0.0],
+                    reach_center_m=[0.0, 0.18, 0.0],
+                    reach_radius_m=0.75,
+                )
+            ],
+        )
+
+        response = make_response(request, image_bytes=None)
+
+        self.assertIsNone(response.error)
+        self.assertEqual(response.intent.target_ref, "relative_tcp")
+        self.assertEqual(response.plan_ir.kind, "manipulator_reach")
+        self.assertAlmostEqual(
+            response.plan_ir.waypoints[0].position_m[1],
+            0.6,
+            places=4,
         )
 
 

@@ -30,6 +30,8 @@ ROBOT_AI_ASR_MODE=disabled
 ROBOT_AI_ASR_BASE_URL=http://localhost:8001/v1
 ROBOT_AI_ASR_MODEL=whisper-tiny.en
 ROBOT_AI_ASR_API_KEY=
+ROBOT_AI_SAVE_IMAGES=1
+ROBOT_AI_OUTPUT_DIR=/workspace/outputs/robot_ai
 ```
 
 Use `ROBOT_AI_MODE=openai_compatible` only on the server where vLLM/SGLang or
@@ -61,6 +63,36 @@ ROBOT_AI_ASR_BASE_URL=http://127.0.0.1:8001/v1
 ROBOT_AI_ASR_MODEL=whisper-tiny.en
 ```
 
+For local faster-whisper ASR:
+
+```text
+ROBOT_AI_ASR_MODE=faster_whisper
+ROBOT_AI_ASR_MODEL_DIR=/models/asr/faster-whisper-base.en
+ROBOT_AI_ASR_DEVICE=cpu
+ROBOT_AI_ASR_COMPUTE_TYPE=int8
+```
+
 The gateway forwards WAV bytes and replaces `command_text` with the transcript
 when ASR returns non-empty text. It still does not download or load ASR model
-weights; run the ASR runtime separately on the GPU server.
+weights during normal startup; download weights with the deploy downloader.
+
+`/v1/audio/transcribe` and `/v1/audio/transcribe_json` transcribe audio without
+also sending a VLM request. Unity uses this endpoint when recording stops so the
+menu text shows the actual command before `SEND`.
+
+## TTS
+
+TTS is not run in this gateway. The server returns `spoken_reply`; Unity speaks
+that text locally through Android TextToSpeech or the Unity-side Piper native
+plugin.
+
+## Images
+
+With `ROBOT_AI_SAVE_IMAGES=1`, the gateway writes:
+
+```text
+*_raw.png
+*_annotated.png
+```
+
+under `ROBOT_AI_OUTPUT_DIR`.

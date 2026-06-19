@@ -5,6 +5,11 @@ ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgomp1 \
+    libsndfile1 \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY server/robot_ai/requirements.txt /app/server/robot_ai/requirements.txt
 RUN pip install --no-cache-dir -r /app/server/robot_ai/requirements.txt
 

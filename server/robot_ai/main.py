@@ -7,9 +7,9 @@ import time
 from typing import Optional
 
 from fastapi import FastAPI, File, Form, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from .model_client import make_response
+from .model_client import make_response, transcribe_audio_bytes
 from .schemas import (
     Diagnostics,
     ErrorPayload,
@@ -25,6 +25,16 @@ class RobotCommandJsonPayload(BaseModel):
     request: RobotCommandRequest
     image_png_base64: str = ""
     audio_wav_base64: str = ""
+
+
+class AudioTranscribeJsonPayload(BaseModel):
+    audio_wav_base64: str = ""
+
+
+class AudioTranscribeResponse(BaseModel):
+    text: str = ""
+    diagnostics: Diagnostics = Field(default_factory=Diagnostics)
+    error: Optional[ErrorPayload] = None
 
 
 @app.get("/health")
@@ -113,6 +123,38 @@ async def robot_command_json(
         return _error("model_error", str(exc))
 
 
+@app.post("/v1/audio/transcribe", response_model=AudioTranscribeResponse)
+async def audio_transcribe(
+    audio: Optional[UploadFile] = File(None),
+) -> AudioTranscribeResponse:
+    if audio is None:
+        return _transcribe_error("bad_request", "Missing audio file.")
+    audio_bytes = await audio.read()
+    return _transcribe(audio_bytes)
+
+
+@app.post("/v1/audio/transcribe_json", response_model=AudioTranscribeResponse)
+async def audio_transcribe_json(
+    payload: AudioTranscribeJsonPayload,
+) -> AudioTranscribeResponse:
+    try:
+        audio_bytes = _decode_optional_base64(payload.audio_wav_base64)
+    except Exception as exc:
+        return _transcribe_error("bad_request", f"Invalid base64 audio: {exc}")
+    if not audio_bytes:
+        return _transcribe_error("bad_request", "Missing audio_wav_base64.")
+    return _transcribe(audio_bytes)
+
+
+def _transcribe(audio_bytes: bytes) -> AudioTranscribeResponse:
+    try:
+        text, diagnostics = transcribe_audio_bytes(audio_bytes)
+        return AudioTranscribeResponse(text=text, diagnostics=diagnostics)
+    except Exception as exc:
+        logger.exception("audio transcription failed")
+        return _transcribe_error("asr_error", str(exc))
+
+
 def _decode_optional_base64(value: str) -> Optional[bytes]:
     if not value:
         return None
@@ -122,6 +164,12 @@ def _decode_optional_base64(value: str) -> Optional[bytes]:
 def _error(code: str, message: str) -> RobotCommandResponse:
     return RobotCommandResponse(
         spoken_reply="I could not create a safe robot plan.",
+        error=ErrorPayload(code=code, message=message),
+    )
+
+
+def _transcribe_error(code: str, message: str) -> AudioTranscribeResponse:
+    return AudioTranscribeResponse(
         error=ErrorPayload(code=code, message=message),
     )
 
