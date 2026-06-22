@@ -67,6 +67,16 @@ curl http://127.0.0.1:8000/v1/models
 curl http://127.0.0.1:8080/health
 ```
 
+Keep this default for Qwen3-VL visual grounding:
+
+```text
+ROBOT_AI_VLM_COORD_FORMAT=qwen_1000
+```
+
+Qwen grounding boxes/points are interpreted as a 0-1000 top-left image grid and
+converted by the gateway to actual Unity screenshot pixels. If a future model
+returns true image pixels, set `ROBOT_AI_VLM_COORD_FORMAT=pixel`.
+
 ## Unity Connection
 
 Unity should call the FastAPI gateway on port `8080`, not vLLM on port `8000`.
@@ -162,9 +172,25 @@ For packaged model-based TTS, put the Piper voice under
 The gateway saves every received screenshot by default:
 
 ```text
-/workspace/outputs/robot_ai/*_raw.png
-/workspace/outputs/robot_ai/*_annotated.png
+server/deploy/outputs/robot_ai/*_raw.png
+server/deploy/outputs/robot_ai/*_annotated.png
+server/deploy/outputs/robot_ai/*_trace.json
 ```
+
+This is a Docker bind mount. Set `ROBOT_AI_OUTPUT_DIR_HOST` in
+`server/deploy/.env` to choose the host folder. Inside the container, it remains
+mounted at `/workspace/outputs/robot_ai`.
+
+Trace files are enabled with `ROBOT_AI_SAVE_TRACES=1`. Use them to inspect:
+`raw_model_output` for the exact VLM JSON,
+`response_after_coordinate_normalization` for Qwen 0-1000 to pixel conversion,
+`response_before_repair` for parsed model output, and
+`final_response.plan_ir.waypoints` for the actual plan Unity executes.
+
+For unknown objects, the gateway returns the corrected bbox/preferred image
+point and clears untrusted model-generated waypoints. Unity then lifts the image
+region to a world target using physics/MR scene colliders or a floor-plane
+fallback before preview and confirmation.
 
 The annotated image includes returned bounding boxes and preferred image points
 when the VLM provides them. Paths are also returned in response diagnostics:

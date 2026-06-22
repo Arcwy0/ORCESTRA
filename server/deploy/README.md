@@ -64,6 +64,17 @@ VLLM_GPU_MEMORY_UTILIZATION=0.88
 Set `HF_TOKEN` only if Hugging Face requires it for download/rate limits. Do not
 commit `.env`.
 
+For Qwen3-VL, keep:
+
+```text
+ROBOT_AI_VLM_COORD_FORMAT=qwen_1000
+```
+
+Qwen returns visual grounding boxes/points in a 0-1000 top-left image grid. The
+gateway converts those values to the actual Unity screenshot pixel resolution
+before saving annotated images or returning the response to Unity. If you switch
+to a model that returns true image pixels, set this to `pixel`.
+
 ## 4. Download Model Locally
 
 This uses a temporary downloader container and writes into `MODEL_DIR`:
@@ -206,21 +217,51 @@ Assets/StreamingAssets/TTS/piper-en_US-lessac-medium
 Then set Unity `RobotAiController -> Tts Backend Mode` to
 `PiperNativePlugin`.
 
-## 11. Saved Screenshots
+## 11. Saved Screenshots and VLM Traces
 
 By default:
 
 ```text
 ROBOT_AI_SAVE_IMAGES=1
-ROBOT_AI_OUTPUT_DIR_HOST=/workspace/outputs/robot_ai
+ROBOT_AI_SAVE_TRACES=1
+ROBOT_AI_OUTPUT_DIR_HOST=./outputs/robot_ai
 ```
 
-The gateway writes raw and annotated images:
+The host directory above is bind-mounted to the gateway container at
+`/workspace/outputs/robot_ai`. With the default relative path, run commands from
+`server/deploy` and the gateway writes raw and annotated images on the Docker
+host here:
 
 ```text
-/workspace/outputs/robot_ai/*_raw.png
-/workspace/outputs/robot_ai/*_annotated.png
+server/deploy/outputs/robot_ai/*_raw.png
+server/deploy/outputs/robot_ai/*_annotated.png
+server/deploy/outputs/robot_ai/*_trace.json
 ```
+
+Use an absolute host path if you want the screenshots elsewhere, for example:
+
+```text
+ROBOT_AI_OUTPUT_DIR_HOST=/media/imit-learn/ISR_2T3/VR_October/orcestra_robot_ai/outputs/robot_ai
+```
+
+Open `*_trace.json` to validate model numbers. The important fields are:
+
+```text
+request.command_text
+raw_model_output
+response_after_coordinate_normalization
+response_before_repair
+final_response.intent.motion_primitive
+final_response.plan_ir.waypoints
+```
+
+`raw_model_output` is the exact VLM JSON text. `response_before_repair` is that
+JSON after schema parsing and image-coordinate conversion. For Qwen, compare
+`raw_model_output` against `response_after_coordinate_normalization` to verify
+0-1000 boxes were scaled to screenshot pixels. `final_response` is what Unity
+actually previews and executes after deterministic gateway repairs such as
+decimal distance parsing, known-object grounding, unknown-object image
+grounding handoff, and circle waypoint generation.
 
 ## 12. Useful Commands
 

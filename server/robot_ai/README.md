@@ -96,3 +96,9 @@ With `ROBOT_AI_SAVE_IMAGES=1`, the gateway writes:
 ```
 
 under `ROBOT_AI_OUTPUT_DIR`.
+When launched with `server/deploy/docker-compose.yml`, that container path is
+bind-mounted from `ROBOT_AI_OUTPUT_DIR_HOST` on the Docker host.
+
+With `ROBOT_AI_SAVE_TRACES=1`, the gateway also writes `*_trace.json` files
+containing the request, raw VLM output, parsed pre-repair response, and final
+response sent to Unity.

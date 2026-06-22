@@ -88,7 +88,9 @@ services:
       ROBOT_AI_ASR_DEVICE: ${ROBOT_AI_ASR_DEVICE:-cpu}
       ROBOT_AI_ASR_COMPUTE_TYPE: ${ROBOT_AI_ASR_COMPUTE_TYPE:-int8}
       ROBOT_AI_SAVE_IMAGES: ${ROBOT_AI_SAVE_IMAGES:-1}
+      ROBOT_AI_SAVE_TRACES: ${ROBOT_AI_SAVE_TRACES:-1}
       ROBOT_AI_OUTPUT_DIR: /workspace/outputs/robot_ai
+      ROBOT_AI_OUTPUT_DIR_HOST_LABEL: ${ROBOT_AI_OUTPUT_DIR_HOST:-./outputs/robot_ai}
     volumes:
       - ../robot_ai:/app/server/robot_ai:ro
       - ../__init__.py:/app/server/__init__.py:ro

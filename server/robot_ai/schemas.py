@@ -98,6 +98,7 @@ class Diagnostics(BaseModel):
     transcript_text: str = ""
     saved_image_path: str = ""
     saved_annotated_image_path: str = ""
+    saved_trace_path: str = ""
     rejection_reason: str = ""
 
 

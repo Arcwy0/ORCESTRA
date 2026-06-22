@@ -47,16 +47,32 @@ def make_response(
         if transcript:
             request = request.model_copy(update={"command_text": transcript})
 
+    trace: dict = {
+        "mode": mode,
+        "asr_mode": asr_mode,
+        "audio_bytes": len(audio_bytes or b""),
+        "transcript_text": transcript,
+        "raw_model_output": "",
+        "model_response_json": None,
+    }
+
     if mode == "openai_compatible":
-        response = _openai_compatible_response(request, image_bytes)
+        response, model_trace = _openai_compatible_response(
+            request, image_bytes)
+        trace.update(model_trace)
+        _normalize_visual_grounding_coordinates(request, response)
     else:
         response = _mock_response(request)
 
+    trace["response_after_coordinate_normalization"] = response.model_dump()
+    trace["response_before_repair"] = response.model_dump()
     response = _repair_or_override_plan(request, response)
 
     saved_raw, saved_annotated = _maybe_save_images(
         request, image_bytes, response)
 
+    if response.diagnostics is None:
+        response.diagnostics = Diagnostics()
     response.diagnostics.gateway_mode = mode
     response.diagnostics.asr_mode = asr_mode
     response.diagnostics.asr_latency_ms = asr_latency_ms
@@ -64,6 +80,8 @@ def make_response(
     response.diagnostics.transcript_text = transcript
     response.diagnostics.saved_image_path = saved_raw
     response.diagnostics.saved_annotated_image_path = saved_annotated
+    response.diagnostics.saved_trace_path = _maybe_save_trace(
+        request, response, trace)
     return response
 
 
@@ -123,7 +141,7 @@ def _vec3(values: list[float]) -> list[float]:
 
 def _openai_compatible_response(
     request: RobotCommandRequest, image_bytes: Optional[bytes]
-) -> RobotCommandResponse:
+) -> tuple[RobotCommandResponse, dict]:
     base_url = os.getenv("ROBOT_AI_BASE_URL", "http://localhost:8000/v1").rstrip("/")
     model = os.getenv("ROBOT_AI_MODEL", "Qwen/Qwen3-VL-8B-Instruct")
     api_key = os.getenv("ROBOT_AI_API_KEY", "")
@@ -159,8 +177,11 @@ def _openai_compatible_response(
         "distance, use the selected robot's tcp_position_m and output a waypoint. "
         "Do not reject as out_of_reach from visual judgment; the gateway and "
         "Unity will validate metric reach using reach_center_m/reach_radius_m. "
-        "For visible unknown objects, return bbox/preferred_point_px and no "
-        "world coordinate. contact_allowed must be false for v1."
+        "For visible unknown objects, return a tight bbox and preferred point "
+        "around the referred object only, in Qwen's 0-1000 top-left image grid, "
+        "with no world coordinate and no waypoints. Ignore UI panels, labels, "
+        "robot links, and the gripper unless the command explicitly refers to "
+        "them. contact_allowed must be false for v1."
     )
     user_text = json.dumps(request.model_dump(), ensure_ascii=False)
     content = [{"type": "text", "text": user_text}]
@@ -215,7 +236,10 @@ def _openai_compatible_response(
     if isinstance(text, list):
         text = "".join(part.get("text", "") for part in text)
     text = _extract_json_object(_strip_code_fence(str(text).strip()))
-    return _parse_robot_response(text)
+    return _parse_robot_response(text), {
+        "raw_model_output": text,
+        "model_response_json": raw,
+    }
 
 
 def _parse_robot_response(text: str) -> RobotCommandResponse:
@@ -286,6 +310,40 @@ def _repair_or_override_plan(
     if response.diagnostics is None:
         response.diagnostics = Diagnostics()
 
+    circle = _circle_tcp_waypoints(request)
+    if circle is not None:
+        robot, waypoints, radius_m, plane_name, center_name = circle
+        response.error = None
+        response.intent = Intent(
+            robot_id=robot.id,
+            task_type="geometric_primitive",
+            target_ref=center_name,
+            motion_primitive=f"{plane_name}_circle_{radius_m:.3f}m",
+        )
+        response.visual_grounding = VisualGrounding(
+            label=center_name,
+            confidence=1.0,
+            world_position_m=waypoints[0],
+            world_confidence=1.0,
+        )
+        response.plan_ir = PlanIr(
+            kind="geometric_primitive",
+            robot_id=robot.id,
+            requires_confirmation=True,
+            contact_allowed=False,
+            min_clearance_m=0.05,
+            speed_scale=0.15,
+            waypoints=[
+                Waypoint(position_m=p, speed_scale=0.15)
+                for p in waypoints
+            ],
+        )
+        response.spoken_reply = (
+            f"Generated a {plane_name} TCP circle with "
+            f"{radius_m:.2f} meter radius. Please confirm the preview."
+        )
+        return response
+
     relative = _relative_tcp_waypoint(request)
     if relative is not None:
         robot, waypoint, distance_m, direction_name = relative
@@ -353,10 +411,8 @@ def _repair_or_override_plan(
                     if response.visual_grounding else 0.0,
                     0.95,
                 ),
-                bbox_xyxy_px=response.visual_grounding.bbox_xyxy_px
-                if response.visual_grounding else [],
-                preferred_point_px=response.visual_grounding.preferred_point_px
-                if response.visual_grounding else [],
+                bbox_xyxy_px=[],
+                preferred_point_px=[],
                 world_position_m=obj.position_m,
                 world_confidence=0.95,
             )
@@ -406,13 +462,183 @@ def _repair_or_override_plan(
                     else "manipulator_reach"
                 )
 
+    if _requires_unity_image_grounding(response):
+        robot = _select_robot(request, response)
+        if robot is not None:
+            if response.intent is None:
+                response.intent = Intent()
+            if response.plan_ir is None:
+                response.plan_ir = PlanIr()
+            plan_kind = "mobile_route" if robot.kind == "mobile" else "manipulator_reach"
+            response.error = None
+            response.intent.robot_id = response.intent.robot_id or robot.id
+            response.intent.task_type = plan_kind
+            response.intent.motion_primitive = (
+                response.intent.motion_primitive or "image_grounded_reach"
+            )
+            response.plan_ir.kind = plan_kind
+            response.plan_ir.robot_id = response.plan_ir.robot_id or robot.id
+            response.plan_ir.requires_confirmation = True
+            response.plan_ir.contact_allowed = False
+            response.plan_ir.waypoints = []
+
     return response
+
+
+def _normalize_visual_grounding_coordinates(
+    request: RobotCommandRequest,
+    response: RobotCommandResponse,
+) -> None:
+    grounding = response.visual_grounding if response is not None else None
+    if grounding is None:
+        return
+
+    width = request.camera.width if request and request.camera else 0
+    height = request.camera.height if request and request.camera else 0
+    if width <= 0 or height <= 0:
+        return
+
+    coord_format = os.getenv(
+        "ROBOT_AI_VLM_COORD_FORMAT",
+        "qwen_1000",
+    ).strip().lower()
+    if coord_format in ("pixel", "pixels", "image_pixels"):
+        _clamp_grounding_to_image(grounding, width, height)
+        return
+
+    scale = coord_format in ("qwen_1000", "qwen", "normalized_1000")
+    if coord_format == "auto":
+        scale = _looks_like_qwen_1000_coordinates(grounding)
+    if scale:
+        if grounding.bbox_xyxy_px and len(grounding.bbox_xyxy_px) >= 4:
+            grounding.bbox_xyxy_px = [
+                grounding.bbox_xyxy_px[0] / 1000.0 * width,
+                grounding.bbox_xyxy_px[1] / 1000.0 * height,
+                grounding.bbox_xyxy_px[2] / 1000.0 * width,
+                grounding.bbox_xyxy_px[3] / 1000.0 * height,
+            ]
+        if grounding.preferred_point_px and len(grounding.preferred_point_px) >= 2:
+            grounding.preferred_point_px = [
+                grounding.preferred_point_px[0] / 1000.0 * width,
+                grounding.preferred_point_px[1] / 1000.0 * height,
+            ]
+
+    _clamp_grounding_to_image(grounding, width, height)
+
+
+def _looks_like_qwen_1000_coordinates(grounding: VisualGrounding) -> bool:
+    values: list[float] = []
+    if grounding.bbox_xyxy_px:
+        values.extend(float(v) for v in grounding.bbox_xyxy_px[:4])
+    if grounding.preferred_point_px:
+        values.extend(float(v) for v in grounding.preferred_point_px[:2])
+    return bool(values) and min(values) >= 0.0 and max(values) <= 1000.0
+
+
+def _clamp_grounding_to_image(
+    grounding: VisualGrounding,
+    width: int,
+    height: int,
+) -> None:
+    if grounding.bbox_xyxy_px and len(grounding.bbox_xyxy_px) >= 4:
+        x1 = _clamp(float(grounding.bbox_xyxy_px[0]), 0.0, max(width - 1, 0))
+        y1 = _clamp(float(grounding.bbox_xyxy_px[1]), 0.0, max(height - 1, 0))
+        x2 = _clamp(float(grounding.bbox_xyxy_px[2]), 0.0, max(width - 1, 0))
+        y2 = _clamp(float(grounding.bbox_xyxy_px[3]), 0.0, max(height - 1, 0))
+        grounding.bbox_xyxy_px = [
+            min(x1, x2),
+            min(y1, y2),
+            max(x1, x2),
+            max(y1, y2),
+        ]
+    if grounding.preferred_point_px and len(grounding.preferred_point_px) >= 2:
+        grounding.preferred_point_px = [
+            _clamp(float(grounding.preferred_point_px[0]), 0.0, max(width - 1, 0)),
+            _clamp(float(grounding.preferred_point_px[1]), 0.0, max(height - 1, 0)),
+        ]
+
+
+def _clamp(value: float, lo: float, hi: float) -> float:
+    return min(max(value, lo), hi)
+
+
+def _requires_unity_image_grounding(response: RobotCommandResponse) -> bool:
+    grounding = response.visual_grounding if response is not None else None
+    if grounding is None:
+        return False
+    if grounding.world_position_m is not None and grounding.world_confidence >= 0.6:
+        return False
+    has_bbox = grounding.bbox_xyxy_px is not None and len(grounding.bbox_xyxy_px) >= 4
+    has_point = (
+        grounding.preferred_point_px is not None and
+        len(grounding.preferred_point_px) >= 2
+    )
+    return has_bbox or has_point
+
+
+def _circle_tcp_waypoints(
+    request: RobotCommandRequest,
+) -> Optional[tuple[RobotSnapshot, list[list[float]], float, str, str]]:
+    command = _norm(request.command_text)
+    raw_command = (request.command_text or "").lower()
+    if "circle" not in command:
+        return None
+    if not any(word in command for word in ("gripper", "tcp", "end effector", "tool")):
+        return None
+
+    robot = _first_manipulator(request)
+    if robot is None:
+        return None
+
+    radius_m = _parse_distance_m(raw_command)
+    if radius_m is None:
+        radius_m = 0.06
+    radius_m = min(max(radius_m, 0.01), 0.50)
+
+    tcp = _vec3(robot.tcp_position_m)
+    root = _vec3(robot.root_position_m)
+    center_name = "base" if "base" in command else "tcp"
+    if center_name == "base":
+        center = [root[0], tcp[1], root[2]]
+    else:
+        center = tcp
+
+    horizontal = "horizontal" in command
+    plane_name = "horizontal" if horizontal else "vertical"
+    count = 24
+    waypoints: list[list[float]] = []
+    for i in range(count + 1):
+        a = i / count * math.tau
+        ca = math.cos(a)
+        sa = math.sin(a)
+        if horizontal:
+            point = [
+                center[0] + radius_m * ca,
+                center[1],
+                center[2] + radius_m * sa,
+            ]
+        else:
+            point = [
+                center[0] + radius_m * ca,
+                center[1] + radius_m * sa,
+                center[2],
+            ]
+        if not _within_reach(robot, point, tolerance_m=0.08):
+            point = _clip_to_reach_sphere(
+                _vec3(robot.reach_center_m),
+                point,
+                max(robot.reach_radius_m * 0.98, 0.05),
+            )
+        waypoints.append(point)
+
+    return robot, waypoints, radius_m, plane_name, center_name
 
 
 def _relative_tcp_waypoint(
     request: RobotCommandRequest,
 ) -> Optional[tuple[RobotSnapshot, list[float], float, str]]:
     command = _norm(request.command_text)
+    raw_command = (request.command_text or "").lower()
     if not any(word in command for word in ("up", "down", "left", "right", "forward", "back")):
         return None
     if not any(word in command for word in ("move", "raise", "lower", "shift", "translate")):
@@ -424,7 +650,7 @@ def _relative_tcp_waypoint(
     if robot is None:
         return None
 
-    distance_m = _parse_distance_m(command)
+    distance_m = _parse_distance_m(raw_command)
     if distance_m is None:
         distance_m = 0.10
     distance_m = min(max(distance_m, 0.005), 0.50)
@@ -764,10 +990,73 @@ def _maybe_save_images(
 
     try:
         _write_annotated_image(image_bytes, response, annotated_path)
-        return str(raw_path), str(annotated_path)
+        return _saved_image_display_path(raw_path), _saved_image_display_path(
+            annotated_path
+        )
     except Exception:
         logger.exception("failed to write annotated image")
-        return str(raw_path), ""
+        return _saved_image_display_path(raw_path), ""
+
+
+def _maybe_save_trace(
+    request: RobotCommandRequest,
+    response: RobotCommandResponse,
+    trace: dict,
+) -> str:
+    if os.getenv("ROBOT_AI_SAVE_TRACES", "1").strip().lower() in (
+        "0",
+        "false",
+        "no",
+        "disabled",
+    ):
+        return ""
+
+    out_dir = Path(os.getenv(
+        "ROBOT_AI_OUTPUT_DIR",
+        "outputs/robot_ai",
+    ))
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    request_id = _safe_file_stem(request.session_id or uuid.uuid4().hex)[:16]
+    path = out_dir / f"{stamp}_{request_id}_trace.json"
+
+    payload = {
+        "schema_version": 1,
+        "request": request.model_dump(),
+        "mode": trace.get("mode", ""),
+        "asr_mode": trace.get("asr_mode", ""),
+        "audio_bytes": trace.get("audio_bytes", 0),
+        "transcript_text": trace.get("transcript_text", ""),
+        "raw_model_output": trace.get("raw_model_output", ""),
+        "model_response_json": trace.get("model_response_json"),
+        "response_after_coordinate_normalization": trace.get(
+            "response_after_coordinate_normalization"
+        ),
+        "response_before_repair": trace.get("response_before_repair"),
+        "final_response": response.model_dump(),
+    }
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return _saved_image_display_path(path)
+
+
+def _saved_image_display_path(path: Path) -> str:
+    """Return a host-visible path label when Docker bind mount info is known."""
+    host_root = os.getenv("ROBOT_AI_OUTPUT_DIR_HOST_LABEL", "").strip()
+    if not host_root:
+        return str(path)
+
+    container_root = Path(os.getenv(
+        "ROBOT_AI_OUTPUT_DIR",
+        "outputs/robot_ai",
+    ))
+    try:
+        rel = path.relative_to(container_root)
+    except ValueError:
+        return str(path)
+    return str(Path(host_root) / rel)
 
 
 def _write_annotated_image(
