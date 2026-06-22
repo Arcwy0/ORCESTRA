@@ -11,6 +11,7 @@ except ModuleNotFoundError:
     HAS_PYDANTIC = False
 
 if HAS_PYDANTIC:
+    from server.robot_ai import model_client
     from server.robot_ai.model_client import (
         make_response,
         _saved_image_display_path,
@@ -168,6 +169,153 @@ class RobotAiGatewayTests(unittest.TestCase):
             places=4,
         )
 
+    def test_ordered_known_objects_create_manipulator_waypoint_sequence(self):
+        request = RobotCommandRequest(
+            session_id="s",
+            command_text=(
+                "First move the gripper to the red cube, then to the blue sphere."
+            ),
+            image_source="unity_screenshot",
+            camera=CameraSnapshot(width=640, height=480),
+            robots=[
+                RobotSnapshot(
+                    id="UR3_TestRobot",
+                    kind="manipulator",
+                    tcp_position_m=[0.2, 0.3, 0.0],
+                    reach_center_m=[0.0, 0.18, 0.0],
+                    reach_radius_m=0.9,
+                )
+            ],
+            known_scene_objects=[
+                KnownSceneObject(
+                    id="red_cube",
+                    label="red cube",
+                    position_m=[0.35, 0.05, 0.0],
+                    size_m=[0.1, 0.1, 0.1],
+                ),
+                KnownSceneObject(
+                    id="blue_sphere",
+                    label="blue sphere",
+                    position_m=[0.15, 0.08, 0.22],
+                    size_m=[0.08, 0.08, 0.08],
+                ),
+            ],
+        )
+
+        response = make_response(request, image_bytes=None)
+
+        self.assertIsNone(response.error)
+        self.assertEqual(response.plan_ir.kind, "manipulator_reach")
+        self.assertEqual(len(response.plan_ir.waypoints), 2)
+        self.assertEqual(len(response.visual_groundings), 2)
+        self.assertEqual(response.visual_groundings[0].label, "red cube")
+        self.assertEqual(response.visual_groundings[1].label, "blue sphere")
+        self.assertAlmostEqual(
+            response.plan_ir.waypoints[0].position_m[0],
+            0.35,
+            places=4,
+        )
+        self.assertAlmostEqual(
+            response.plan_ir.waypoints[1].position_m[2],
+            0.22,
+            places=4,
+        )
+
+    def test_ordered_known_objects_create_mobile_route_sequence(self):
+        request = RobotCommandRequest(
+            session_id="s",
+            command_text="Drive to the package, then to the delivery zone.",
+            image_source="unity_screenshot",
+            camera=CameraSnapshot(width=640, height=480),
+            robots=[
+                RobotSnapshot(
+                    id="Scout_1",
+                    kind="mobile",
+                    root_position_m=[0.0, 0.03, 0.0],
+                )
+            ],
+            known_scene_objects=[
+                KnownSceneObject(
+                    id="package",
+                    label="package",
+                    position_m=[1.0, 0.2, 0.4],
+                    size_m=[0.2, 0.2, 0.2],
+                ),
+                KnownSceneObject(
+                    id="delivery_zone",
+                    label="delivery zone",
+                    position_m=[2.5, 0.0, -0.5],
+                    size_m=[0.5, 0.01, 0.5],
+                ),
+            ],
+        )
+
+        response = make_response(request, image_bytes=None)
+
+        self.assertIsNone(response.error)
+        self.assertEqual(response.plan_ir.kind, "mobile_route")
+        self.assertEqual(len(response.plan_ir.waypoints), 2)
+        self.assertEqual(
+            response.plan_ir.waypoints[0].position_m,
+            [1.0, 0.03, 0.4],
+        )
+        self.assertEqual(
+            response.plan_ir.waypoints[1].position_m,
+            [2.5, 0.03, -0.5],
+        )
+
+    def test_ordered_known_objects_resolve_ordinal_table_label(self):
+        request = RobotCommandRequest(
+            session_id="s",
+            command_text=(
+                "First move the gripper to the cube on the table, "
+                "then to the center of the second table."
+            ),
+            image_source="unity_screenshot",
+            camera=CameraSnapshot(width=640, height=480),
+            robots=[
+                RobotSnapshot(
+                    id="UR3_TestRobot",
+                    kind="manipulator",
+                    tcp_position_m=[0.0, 0.2, 0.0],
+                    reach_center_m=[0.0, 0.2, 0.0],
+                    reach_radius_m=2.0,
+                )
+            ],
+            known_scene_objects=[
+                KnownSceneObject(
+                    id="cube",
+                    label="cube",
+                    position_m=[0.3, 0.05, 0.0],
+                    size_m=[0.1, 0.1, 0.1],
+                ),
+                KnownSceneObject(
+                    id="table_1",
+                    label="table 1",
+                    position_m=[0.4, 0.0, 0.0],
+                    size_m=[0.8, 0.05, 0.8],
+                ),
+                KnownSceneObject(
+                    id="table_2",
+                    label="table 2",
+                    position_m=[0.9, 0.0, 0.2],
+                    size_m=[0.8, 0.05, 0.8],
+                ),
+            ],
+        )
+
+        response = make_response(request, image_bytes=None)
+
+        self.assertIsNone(response.error)
+        self.assertEqual(len(response.plan_ir.waypoints), 2)
+        self.assertEqual(response.visual_groundings[0].label, "cube")
+        self.assertEqual(response.visual_groundings[1].label, "table 2")
+        self.assertAlmostEqual(
+            response.plan_ir.waypoints[1].position_m[0],
+            0.9,
+            places=4,
+        )
+
     def test_known_blue_cube_overrides_wrong_vlm_pixel_and_waypoint(self):
         request = RobotCommandRequest(
             session_id="s",
@@ -277,6 +425,53 @@ class RobotAiGatewayTests(unittest.TestCase):
             self.assertAlmostEqual(
                 response.visual_grounding.preferred_point_px[1],
                 613 / 1000 * 875,
+                places=4,
+            )
+        finally:
+            if old_format is None:
+                os.environ.pop("ROBOT_AI_VLM_COORD_FORMAT", None)
+            else:
+                os.environ["ROBOT_AI_VLM_COORD_FORMAT"] = old_format
+
+    def test_qwen_1000_grounding_coordinates_scale_all_targets(self):
+        old_format = os.environ.get("ROBOT_AI_VLM_COORD_FORMAT")
+        try:
+            os.environ["ROBOT_AI_VLM_COORD_FORMAT"] = "qwen_1000"
+            request = RobotCommandRequest(
+                session_id="s",
+                command_text="Move to the cube, then the table center.",
+                image_source="unity_screenshot",
+                camera=CameraSnapshot(width=1000, height=500),
+            )
+            response = RobotCommandResponse(
+                visual_groundings=[
+                    VisualGrounding(
+                        label="cube",
+                        confidence=0.95,
+                        bbox_xyxy_px=[100, 200, 300, 400],
+                        preferred_point_px=[200, 300],
+                    ),
+                    VisualGrounding(
+                        label="table center",
+                        confidence=0.90,
+                        bbox_xyxy_px=[500, 100, 800, 300],
+                        preferred_point_px=[650, 200],
+                    ),
+                ],
+            )
+
+            _normalize_visual_grounding_coordinates(request, response)
+
+            self.assertEqual(len(response.visual_groundings), 2)
+            self.assertEqual(response.visual_grounding.label, "cube")
+            self.assertAlmostEqual(
+                response.visual_groundings[0].bbox_xyxy_px[1],
+                100.0,
+                places=4,
+            )
+            self.assertAlmostEqual(
+                response.visual_groundings[1].preferred_point_px[1],
+                100.0,
                 places=4,
             )
         finally:
@@ -448,6 +643,69 @@ class RobotAiGatewayTests(unittest.TestCase):
                 os.environ.pop("ROBOT_AI_OUTPUT_DIR_HOST_LABEL", None)
             else:
                 os.environ["ROBOT_AI_OUTPUT_DIR_HOST_LABEL"] = old_host_label
+
+    def test_openai_payload_uses_multi_waypoint_token_budget_by_default(self):
+        old_mode = os.environ.get("ROBOT_AI_MODE")
+        old_max_tokens = os.environ.get("ROBOT_AI_MAX_TOKENS")
+        old_urlopen = model_client.urllib.request.urlopen
+        captured = {}
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                content = json.dumps({
+                    "spoken_reply": "ok",
+                    "intent": {},
+                    "visual_grounding": {},
+                    "visual_groundings": [],
+                    "plan_ir": {},
+                    "diagnostics": {},
+                    "error": None,
+                })
+                return json.dumps({
+                    "choices": [
+                        {
+                            "message": {"content": content},
+                            "finish_reason": "stop",
+                        }
+                    ]
+                }).encode("utf-8")
+
+        def fake_urlopen(req, timeout):
+            captured["payload"] = json.loads(req.data.decode("utf-8"))
+            return FakeResponse()
+
+        try:
+            os.environ["ROBOT_AI_MODE"] = "openai_compatible"
+            os.environ.pop("ROBOT_AI_MAX_TOKENS", None)
+            model_client.urllib.request.urlopen = fake_urlopen
+            request = RobotCommandRequest(
+                session_id="token-budget",
+                command_text=(
+                    "First move the gripper to the cube, then to the table."
+                ),
+                image_source="unity_screenshot",
+                camera=CameraSnapshot(width=640, height=480),
+            )
+
+            make_response(request, image_bytes=None)
+
+            self.assertGreaterEqual(captured["payload"]["max_tokens"], 2048)
+        finally:
+            model_client.urllib.request.urlopen = old_urlopen
+            if old_mode is None:
+                os.environ.pop("ROBOT_AI_MODE", None)
+            else:
+                os.environ["ROBOT_AI_MODE"] = old_mode
+            if old_max_tokens is None:
+                os.environ.pop("ROBOT_AI_MAX_TOKENS", None)
+            else:
+                os.environ["ROBOT_AI_MAX_TOKENS"] = old_max_tokens
 
     def test_trace_file_records_request_and_final_response(self):
         old_save_traces = os.environ.get("ROBOT_AI_SAVE_TRACES")

@@ -11,7 +11,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Optional
 
 from .schemas import (
@@ -60,13 +60,16 @@ def make_response(
         response, model_trace = _openai_compatible_response(
             request, image_bytes)
         trace.update(model_trace)
+        _sync_visual_groundings(response)
         _normalize_visual_grounding_coordinates(request, response)
     else:
         response = _mock_response(request)
+        _sync_visual_groundings(response)
 
     trace["response_after_coordinate_normalization"] = response.model_dump()
     trace["response_before_repair"] = response.model_dump()
     response = _repair_or_override_plan(request, response)
+    _sync_visual_groundings(response)
 
     saved_raw, saved_annotated = _maybe_save_images(
         request, image_bytes, response)
@@ -108,6 +111,15 @@ def _mock_response(request: RobotCommandRequest) -> RobotCommandResponse:
             world_position_m=world,
             world_confidence=0.8,
         ),
+        visual_groundings=[
+            VisualGrounding(
+                label="mock target",
+                confidence=0.85,
+                preferred_point_px=[width * 0.5, height * 0.5],
+                world_position_m=world,
+                world_confidence=0.8,
+            )
+        ],
         plan_ir=PlanIr(
             kind=plan_kind,
             robot_id=robot_id,
@@ -157,6 +169,10 @@ def _openai_compatible_response(
         "\"visual_grounding\": {\"label\": string, \"confidence\": number, "
         "\"bbox_xyxy_px\": number[], \"preferred_point_px\": number[], "
         "\"world_position_m\": null or number[], \"world_confidence\": number}, "
+        "\"visual_groundings\": [] or [{\"label\": string, "
+        "\"confidence\": number, \"bbox_xyxy_px\": number[], "
+        "\"preferred_point_px\": number[], \"world_position_m\": null or "
+        "number[], \"world_confidence\": number}], "
         "\"plan_ir\": {\"version\": 1, \"kind\": string, \"robot_id\": string, "
         "\"requires_confirmation\": true, \"contact_allowed\": false, "
         "\"min_clearance_m\": number, \"speed_scale\": number, "
@@ -168,7 +184,18 @@ def _openai_compatible_response(
         "\"error\": null or {\"code\": string, \"message\": string}"
         "}. "
         "Never return intent as a string. Never return visual_grounding or plan_ir "
-        "as a list. If the target is not visible, return the same object schema "
+        "as a list. visual_grounding is the first target for backward "
+        "compatibility; visual_groundings is the ordered list of all target "
+        "evidence in execution order. If there is only one target, include it in "
+        "both visual_grounding and visual_groundings. For multi-step commands "
+        "such as 'first go to A, then go to B', output every target in "
+        "visual_groundings in that requested order. If all targets have metric "
+        "positions from known_scene_objects or relative TCP math, populate "
+        "plan_ir.waypoints in the same order. If any target is a visible unknown "
+        "object, return a tight bbox/preferred point for each unknown target in "
+        "visual_groundings and leave plan_ir.waypoints empty; Unity will lift "
+        "each target to 3D and create the ordered waypoint path. If the target "
+        "is not visible, return the same object schema "
         "with error={\"code\":\"not_grounded\",\"message\":\"...\"}. "
         "Do not infer metric 3D coordinates from image pixels alone. If a "
         "referenced object appears in known_scene_objects, you may use that "
@@ -201,7 +228,7 @@ def _openai_compatible_response(
             {"role": "user", "content": content},
         ],
         "temperature": 0.1,
-        "max_tokens": int(os.getenv("ROBOT_AI_MAX_TOKENS", "512")),
+        "max_tokens": int(os.getenv("ROBOT_AI_MAX_TOKENS", "2048")),
     }
     logger.info(
         "forwarding to model base_url=%s model=%s image_bytes=%d timeout_s=%.1f",
@@ -278,8 +305,37 @@ def _coerce_robot_response_payload(payload: object) -> dict:
             "motion_primitive": "",
         }
 
-    if not isinstance(out.get("visual_grounding"), dict):
-        out["visual_grounding"] = VisualGrounding().model_dump()
+    visual_grounding = out.get("visual_grounding")
+    visual_groundings = out.get("visual_groundings")
+    if isinstance(visual_grounding, list):
+        if visual_groundings is None:
+            visual_groundings = visual_grounding
+        visual_grounding = (
+            visual_grounding[0] if visual_grounding and
+            isinstance(visual_grounding[0], dict)
+            else VisualGrounding().model_dump()
+        )
+    if not isinstance(visual_grounding, dict):
+        visual_grounding = VisualGrounding().model_dump()
+    out["visual_grounding"] = visual_grounding
+
+    if isinstance(visual_groundings, dict):
+        visual_groundings = [visual_groundings]
+    if not isinstance(visual_groundings, list):
+        visual_groundings = []
+    visual_groundings = [
+        item for item in visual_groundings
+        if isinstance(item, dict)
+    ]
+    if not visual_groundings and _grounding_payload_has_content(
+        visual_grounding
+    ):
+        visual_groundings = [visual_grounding]
+    if visual_groundings and not _grounding_payload_has_content(
+        visual_grounding
+    ):
+        out["visual_grounding"] = visual_groundings[0]
+    out["visual_groundings"] = visual_groundings
 
     if not isinstance(out.get("plan_ir"), dict):
         out["plan_ir"] = PlanIr().model_dump()
@@ -300,6 +356,80 @@ def _coerce_robot_response_payload(payload: object) -> dict:
         ).model_dump()
 
     return out
+
+
+def _grounding_payload_has_content(payload: dict) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    return bool(
+        payload.get("label") or
+        payload.get("confidence") or
+        payload.get("bbox_xyxy_px") or
+        payload.get("preferred_point_px") or
+        payload.get("world_position_m") or
+        payload.get("world_confidence")
+    )
+
+
+def _sync_visual_groundings(response: RobotCommandResponse) -> None:
+    if response is None:
+        return
+    primary = response.visual_grounding
+    sequence = [
+        grounding for grounding in (response.visual_groundings or [])
+        if _visual_grounding_has_content(grounding)
+    ]
+    if sequence:
+        response.visual_grounding = sequence[0]
+        response.visual_groundings = sequence
+        return
+    if _visual_grounding_has_content(primary):
+        response.visual_groundings = [primary]
+    else:
+        response.visual_groundings = []
+
+
+def _visual_grounding_has_content(grounding: Optional[VisualGrounding]) -> bool:
+    if grounding is None:
+        return False
+    return bool(
+        grounding.label or
+        grounding.confidence or
+        grounding.bbox_xyxy_px or
+        grounding.preferred_point_px or
+        grounding.world_position_m or
+        grounding.world_confidence
+    )
+
+
+def _iter_visual_groundings(
+    response: RobotCommandResponse,
+) -> list[VisualGrounding]:
+    if response is None:
+        return []
+    _sync_visual_groundings(response)
+    seen: set[tuple] = set()
+    result: list[VisualGrounding] = []
+    for grounding in [response.visual_grounding] + list(
+        response.visual_groundings or []
+    ):
+        if not _visual_grounding_has_content(grounding):
+            continue
+        key = _visual_grounding_key(grounding)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(grounding)
+    return result
+
+
+def _visual_grounding_key(grounding: VisualGrounding) -> tuple:
+    return (
+        grounding.label,
+        tuple(grounding.bbox_xyxy_px or []),
+        tuple(grounding.preferred_point_px or []),
+        tuple(grounding.world_position_m or []),
+    )
 
 
 def _repair_or_override_plan(
@@ -375,7 +505,51 @@ def _repair_or_override_plan(
         )
         return response
 
-    match = _known_object_target(request, response)
+    sequence = _known_object_sequence(request, response)
+    if sequence is not None:
+        robot, objects, waypoints = sequence
+        plan_kind = "mobile_route" if robot.kind == "mobile" else "manipulator_reach"
+        labels = [obj.label for obj in objects]
+        response.error = None
+        response.intent = Intent(
+            robot_id=robot.id,
+            task_type=plan_kind,
+            target_ref=" -> ".join(labels),
+            motion_primitive="ordered_object_route",
+        )
+        response.visual_groundings = [
+            VisualGrounding(
+                label=obj.label,
+                confidence=0.95,
+                bbox_xyxy_px=[],
+                preferred_point_px=[],
+                world_position_m=obj.position_m,
+                world_confidence=0.95,
+            )
+            for obj in objects
+        ]
+        response.visual_grounding = response.visual_groundings[0]
+        response.plan_ir = PlanIr(
+            kind=plan_kind,
+            robot_id=robot.id,
+            requires_confirmation=True,
+            contact_allowed=False,
+            min_clearance_m=0.05,
+            speed_scale=0.2,
+            waypoints=[
+                Waypoint(position_m=point, speed_scale=0.2)
+                for point in waypoints
+            ],
+        )
+        response.spoken_reply = (
+            f"Planned {len(waypoints)} ordered waypoints. "
+            "Please confirm the highlighted path."
+        )
+        return response
+
+    match = None if _has_multi_grounding_sequence(response) else (
+        _known_object_target(request, response)
+    )
     if match is not None:
         robot, obj, waypoint = match
         model_rejected_reach = (
@@ -416,6 +590,7 @@ def _repair_or_override_plan(
                 world_position_m=obj.position_m,
                 world_confidence=0.95,
             )
+            response.visual_groundings = [response.visual_grounding]
             plan_kind = "mobile_route" if robot.kind == "mobile" else "manipulator_reach"
             response.plan_ir = PlanIr(
                 kind=plan_kind,
@@ -438,15 +613,9 @@ def _repair_or_override_plan(
                 response.visual_grounding.world_confidence,
                 0.9,
             )
+            response.visual_groundings = [response.visual_grounding]
     elif response.error is not None and _mentions_reach(response.error.message):
-        has_image_grounding = (
-            response.visual_grounding is not None and
-            (
-                len(response.visual_grounding.preferred_point_px or []) >= 2 or
-                len(response.visual_grounding.bbox_xyxy_px or []) >= 4
-            )
-        )
-        if has_image_grounding:
+        if _requires_unity_image_grounding(response):
             logger.info(
                 "clearing model reach rejection because image grounding exists; "
                 "Unity will validate metric reach"
@@ -489,13 +658,21 @@ def _normalize_visual_grounding_coordinates(
     request: RobotCommandRequest,
     response: RobotCommandResponse,
 ) -> None:
-    grounding = response.visual_grounding if response is not None else None
-    if grounding is None:
-        return
-
     width = request.camera.width if request and request.camera else 0
     height = request.camera.height if request and request.camera else 0
     if width <= 0 or height <= 0:
+        return
+
+    for grounding in _iter_visual_groundings(response):
+        _normalize_one_visual_grounding(grounding, width, height)
+
+
+def _normalize_one_visual_grounding(
+    grounding: VisualGrounding,
+    width: int,
+    height: int,
+) -> None:
+    if grounding is None:
         return
 
     coord_format = os.getenv(
@@ -563,17 +740,23 @@ def _clamp(value: float, lo: float, hi: float) -> float:
 
 
 def _requires_unity_image_grounding(response: RobotCommandResponse) -> bool:
-    grounding = response.visual_grounding if response is not None else None
-    if grounding is None:
-        return False
-    if grounding.world_position_m is not None and grounding.world_confidence >= 0.6:
-        return False
-    has_bbox = grounding.bbox_xyxy_px is not None and len(grounding.bbox_xyxy_px) >= 4
-    has_point = (
-        grounding.preferred_point_px is not None and
-        len(grounding.preferred_point_px) >= 2
-    )
-    return has_bbox or has_point
+    for grounding in _iter_visual_groundings(response):
+        if (
+            grounding.world_position_m is not None and
+            grounding.world_confidence >= 0.6
+        ):
+            continue
+        has_bbox = (
+            grounding.bbox_xyxy_px is not None and
+            len(grounding.bbox_xyxy_px) >= 4
+        )
+        has_point = (
+            grounding.preferred_point_px is not None and
+            len(grounding.preferred_point_px) >= 2
+        )
+        if has_bbox or has_point:
+            return True
+    return False
 
 
 def _circle_tcp_waypoints(
@@ -698,6 +881,8 @@ def _known_object_target(
         query_parts.extend([response.intent.target_ref, response.intent.motion_primitive])
     if response.visual_grounding is not None:
         query_parts.append(response.visual_grounding.label)
+    for grounding in response.visual_groundings or []:
+        query_parts.append(grounding.label)
     query = _norm(" ".join(part or "" for part in query_parts))
 
     best_obj = None
@@ -716,19 +901,183 @@ def _known_object_target(
     if robot is None:
         return None
 
-    target = _vec3(best_obj.position_m)
+    return robot, best_obj, _object_waypoint(robot, best_obj)
+
+
+def _known_object_sequence(
+    request: RobotCommandRequest,
+    response: RobotCommandResponse,
+) -> Optional[tuple[RobotSnapshot, list[KnownSceneObject], list[list[float]]]]:
+    if not request.known_scene_objects:
+        return None
+
+    robot = _select_robot(request, response)
+    if robot is None:
+        return None
+
+    command = _norm(request.command_text)
+    if not _looks_like_ordered_command(command):
+        return None
+
+    matches: list[tuple[int, int, KnownSceneObject]] = []
+    for obj in request.known_scene_objects:
+        pos, score = _object_mention_position(command, obj)
+        if pos >= 0 and score > 0:
+            matches.append((pos, -score, obj))
+
+    if len(matches) < 2:
+        return None
+
+    matches.sort(key=lambda item: (item[0], item[1], item[2].id))
+    selected: list[KnownSceneObject] = []
+    seen: set[str] = set()
+    for _pos, _score, obj in matches:
+        key = obj.id or obj.label
+        if key in seen:
+            continue
+        seen.add(key)
+        selected.append(obj)
+
+    if len(selected) < 2:
+        return None
+
+    waypoints = [_object_waypoint(robot, obj) for obj in selected]
+    return robot, selected, waypoints
+
+
+def _object_waypoint(robot: RobotSnapshot, obj: KnownSceneObject) -> list[float]:
+    target = _vec3(obj.position_m)
     if robot.kind == "mobile":
-        return robot, best_obj, [target[0], _vec3(robot.root_position_m)[1], target[2]]
+        return [target[0], _vec3(robot.root_position_m)[1], target[2]]
 
     clearance = 0.05
-    if len(best_obj.size_m or []) >= 3:
-        clearance += max(best_obj.size_m[1] * 0.5, 0.0)
+    if len(obj.size_m or []) >= 3:
+        clearance += max(obj.size_m[1] * 0.5, 0.0)
     waypoint = [target[0], target[1] + clearance, target[2]]
     if not _within_reach(robot, waypoint, tolerance_m=0.08):
         center = _vec3(robot.reach_center_m)
         radius = max(robot.reach_radius_m * 0.98, 0.05)
         waypoint = _clip_to_reach_sphere(center, waypoint, radius)
-    return robot, best_obj, waypoint
+    return waypoint
+
+
+def _looks_like_ordered_command(command: str) -> bool:
+    if not command:
+        return False
+    return any(
+        token in command.split()
+        for token in ("first", "then", "second", "after", "next")
+    ) or " and then " in f" {command} "
+
+
+def _object_mention_position(
+    command: str,
+    obj: KnownSceneObject,
+) -> tuple[int, int]:
+    label = _norm(obj.label)
+    obj_id = _norm(obj.id)
+    ordinal_pos, ordinal_score = _ordinal_object_mention_position(
+        command, label, obj_id
+    )
+    if ordinal_pos >= 0:
+        return ordinal_pos, ordinal_score
+    if _object_ordinal_index(label, obj_id) is not None:
+        return -1, 0
+
+    for phrase in (label, obj_id):
+        if not phrase:
+            continue
+        pos = command.find(phrase)
+        if pos >= 0:
+            return pos, len(phrase)
+
+    tokens = [token for token in label.split() if len(token) >= 3]
+    if not tokens:
+        return -1, 0
+
+    positions: list[int] = []
+    score = 0
+    for token in tokens:
+        pos = command.find(token)
+        if pos < 0:
+            return -1, 0
+        positions.append(pos)
+        score += len(token)
+    return min(positions), score
+
+
+def _ordinal_object_mention_position(
+    command: str,
+    label: str,
+    obj_id: str,
+) -> tuple[int, int]:
+    index = _object_ordinal_index(label, obj_id)
+    if index is None:
+        return -1, 0
+
+    base_tokens = [
+        token for token in label.split()
+        if len(token) >= 3 and not token.isdigit() and token not in _ORDINAL_WORDS
+    ]
+    if not base_tokens:
+        base_tokens = [
+            token for token in obj_id.split()
+            if len(token) >= 3 and not token.isdigit() and token not in _ORDINAL_WORDS
+        ]
+    if not base_tokens:
+        return -1, 0
+
+    ordinal_forms = _ORDINAL_FORMS.get(index, [])
+    best_pos = -1
+    best_score = 0
+    for ordinal in ordinal_forms:
+        for base in base_tokens:
+            for phrase in (f"{ordinal} {base}", f"{base} {ordinal}"):
+                pos = command.find(phrase)
+                if pos >= 0:
+                    score = len(base) + len(ordinal) + 6
+                    if score > best_score:
+                        best_pos = pos
+                        best_score = score
+    return best_pos, best_score
+
+
+def _object_ordinal_index(label: str, obj_id: str) -> Optional[int]:
+    tokens = (label + " " + obj_id).split()
+    for token in tokens:
+        if token.isdigit():
+            return int(token)
+        if token in _ORDINAL_WORDS:
+            return _ORDINAL_WORDS[token]
+    return None
+
+
+_ORDINAL_WORDS = {
+    "first": 1,
+    "1st": 1,
+    "one": 1,
+    "second": 2,
+    "2nd": 2,
+    "two": 2,
+    "third": 3,
+    "3rd": 3,
+    "three": 3,
+    "fourth": 4,
+    "4th": 4,
+    "four": 4,
+}
+
+
+_ORDINAL_FORMS = {
+    1: ["first", "1st", "one", "1"],
+    2: ["second", "2nd", "two", "2"],
+    3: ["third", "3rd", "three", "3"],
+    4: ["fourth", "4th", "four", "4"],
+}
+
+
+def _has_multi_grounding_sequence(response: RobotCommandResponse) -> bool:
+    return len(_iter_visual_groundings(response)) > 1
 
 
 def _select_robot(
@@ -1056,6 +1405,8 @@ def _saved_image_display_path(path: Path) -> str:
         rel = path.relative_to(container_root)
     except ValueError:
         return str(path)
+    if host_root.startswith("/"):
+        return str(PurePosixPath(host_root) / rel.as_posix())
     return str(Path(host_root) / rel)
 
 
@@ -1081,12 +1432,18 @@ def _write_annotated_image(
             pass
 
     draw = ImageDraw.Draw(image)
-    grounding = response.visual_grounding
-    if grounding is not None:
+    colors = [
+        (255, 40, 40),
+        (40, 180, 255),
+        (255, 180, 40),
+        (180, 80, 255),
+    ]
+    for idx, grounding in enumerate(_iter_visual_groundings(response)):
+        color = colors[idx % len(colors)]
         bbox = grounding.bbox_xyxy_px or []
         if len(bbox) >= 4:
             x1, y1, x2, y2 = [float(v) for v in bbox[:4]]
-            draw.rectangle((x1, y1, x2, y2), outline=(255, 40, 40), width=4)
+            draw.rectangle((x1, y1, x2, y2), outline=color, width=4)
         point = grounding.preferred_point_px or []
         if len(point) >= 2:
             x, y = float(point[0]), float(point[1])
@@ -1095,7 +1452,7 @@ def _write_annotated_image(
             draw.line((x, y - r, x, y + r), fill=(40, 255, 40), width=3)
         label = grounding.label or ""
         if label:
-            draw.text((10, 10), label, fill=(255, 255, 0))
+            draw.text((10, 10 + idx * 18), f"{idx + 1}. {label}", fill=color)
     image.save(annotated_path)
 
 

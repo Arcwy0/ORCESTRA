@@ -106,6 +106,7 @@ class RobotCommandResponse(BaseModel):
     spoken_reply: str = ""
     intent: Intent = Field(default_factory=Intent)
     visual_grounding: VisualGrounding = Field(default_factory=VisualGrounding)
+    visual_groundings: List[VisualGrounding] = Field(default_factory=list)
     plan_ir: PlanIr = Field(default_factory=PlanIr)
     diagnostics: Diagnostics = Field(default_factory=Diagnostics)
     error: Optional[ErrorPayload] = None
