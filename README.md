@@ -115,27 +115,32 @@ You have two ways to run the project on the headset.
 
 ### B. Standalone APK (installed on the headset, no PC after install)
 
-This is the recommended workflow once the project works. The APK runs entirely on the headset; no Link, no PC, no cable.
+This is the recommended workflow once the project works. The APK runs on the
+headset; the Unity editor and PC are not needed after install. If AI control is
+enabled, the headset still needs network access to the VLM gateway.
 
 #### One-time Project Settings (Player → Android tab)
 
 | Setting | Value |
 |---|---|
-| Company Name | your name / org |
-| Product Name | shown on the headset's app icon (e.g. `UR3 MR Teach`) |
-| Identification → Override Default Package Name | enable + e.g. `com.yourname.ur3mrteach` |
-| Minimum API Level | Android 10 (API 29) or higher |
+| Company Name | `ORCESTRA` |
+| Product Name | `ORCESTRA Robot AI` |
+| Identification → Override Default Package Name | enabled, `com.orcestra.robotai` |
+| Minimum API Level | Android 12L (API 32) |
+| Target API Level | Automatic |
 | Target Architectures | **ARM64 only** (untick ARMv7 — Quest is 64-bit) |
 | Scripting Backend | **IL2CPP** |
 | Graphics API | **Vulkan** (remove OpenGL ES) |
-| Configuration | **Release** for the final APK (not Development Build) |
+| Internet Access | Force internet permission enabled |
+| Microphone | `RECORD_AUDIO` is declared; runtime permission is requested on first REC |
+| Configuration | **Release** for final APKs; Development Build is useful while debugging |
 
 #### One-time XR Plug-in Management (Project Settings → XR Plug-in Management → Android tab)
 
 Enable **OpenXR**, then under **OpenXR → Features** make sure these Meta Quest features are ON (already configured in this repo, but verify after first open):
 
-- Meta Quest Support
-- Meta Quest: Camera (Passthrough)
+- Meta Quest Support, with Quest 3 and Quest 3S enabled
+- Meta Quest: Camera (Passthrough), with camera image support enabled
 - Meta Quest: Planes  (provider type = **Spatial Entity**)
 - Meta Quest: Raycasts
 - Meta Quest: Session
@@ -144,8 +149,15 @@ Enable **OpenXR**, then under **OpenXR → Features** make sure these Meta Quest
 #### Build the APK
 
 1. **File → Build Profiles** → select **Android** (install Build Support if prompted).
-2. **Add Open Scenes** (`UR3_Demo`).
+2. Confirm the enabled build scenes are `UR3_Demo` and `VR_VLM_Test`.
 3. Click **Build And Run** to install on the connected headset immediately, **or** **Build** to save a `.apk` file you can hand off.
+
+For the AI pipeline, set `AI_RobotControl.serverUrl` to a server address the
+headset can reach, for example
+`http://192.168.1.50:8080/v1/robot/command`. Do not use `127.0.0.1` in a
+standalone APK unless the server is running on the headset.
+
+See `docs/quest_standalone_build_guide.md` for the complete build checklist.
 
 #### Install the .apk on any Quest (without Unity)
 

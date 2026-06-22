@@ -1,4 +1,7 @@
 using UnityEngine;
+#if UNITY_ANDROID && !UNITY_EDITOR
+using UnityEngine.Android;
+#endif
 
 namespace VRInteraction.AI.Speech
 {
@@ -16,6 +19,14 @@ namespace VRInteraction.AI.Speech
         public bool Start(out string error)
         {
             error = null;
+#if UNITY_ANDROID && !UNITY_EDITOR
+            if (!Permission.HasUserAuthorizedPermission(Permission.Microphone))
+            {
+                Permission.RequestUserPermission(Permission.Microphone);
+                error = "Microphone permission requested. Press REC again after granting it.";
+                return false;
+            }
+#endif
             if (Microphone.devices == null || Microphone.devices.Length == 0)
             {
                 error = "No microphone device found.";
