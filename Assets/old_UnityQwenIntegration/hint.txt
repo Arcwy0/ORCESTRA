@@ -1,0 +1,19 @@
+docker build -f docker/Dockerfile-cu121 -t qwen2-container .
+
+##########1
+docker run -it --name qwen2vl --gpus '"device=0"' -p 8008:8080 -v /media/imit-learn/ISR_2T1/VR_October/Qwen2-VL:/app qwen2-container
+
+
+docker stop qwen2vl
+docker rm qwen2vl
+
+docker run -it qwenllm/qwenvl:2-cu121 -p 8008:8080 -v /media/imit-learn/ISR_2T/VR_October/Qwen2-VL:/app --gpus all --rm --name qwen2 qwen2-container bash
+
+pip install datasets==2.21.0
+llamafactory-cli train examples/train_qlora/llama3_lora_sft_gptq.yaml 
+pip install multiprocess==0.70.10
+cp -R llamafactory /usr/local/lib/python3.8/dist-packages
+cp -R llamafactory.egg-info/ /usr/local/lib/python3.8/dist-packages/CUDA_VERSION=cu121
+
+
+cp llamafactory/data/mm_plugin.py /usr/local/lib/python3.8/dist-packages/llamafactory/data/
