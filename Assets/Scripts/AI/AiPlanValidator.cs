@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 using VRInteraction.Placement;
 using VRInteraction.Robot;
@@ -8,6 +9,10 @@ namespace VRInteraction.AI
     {
         public float minGroundingConfidence = 0.6f;
         public float reachToleranceMeters = 0.03f;
+        public float ikSampleSpacingMeters = 0.015f;
+        public int ikMinSegmentSamples = 12;
+        public int ikValidationIterations = 80;
+        public float ikWarningErrorMeters = 0.08f;
 
         public bool Validate(AiCommandResponse response, out string error)
         {
@@ -111,7 +116,7 @@ namespace VRInteraction.AI
                    planKind == "geometric_primitive";
         }
 
-        private static bool ValidateManipulator(
+        private bool ValidateManipulator(
             PlacedRobot robot, AiPlanIr plan, out string error)
         {
             error = null;
@@ -147,17 +152,54 @@ namespace VRInteraction.AI
                 }
             }
 
-            var targets = new Vector3[plan.waypoints.Length];
-            for (int i = 0; i < targets.Length; i++)
-                targets[i] = AiModelUtil.ToVector3(plan.waypoints[i].position_m);
+            var requestedTargets = new List<Vector3>();
+            for (int i = 0; i < plan.waypoints.Length; i++)
+                requestedTargets.Add(AiModelUtil.ToVector3(
+                    plan.waypoints[i].position_m));
 
-            var solved = CcdIkSolver.SolveBatch(ctrl, tcp, targets, 40, 0.004f);
-            if (solved == null || solved.Count != targets.Length)
+            var targets = BuildManipulatorSamples(tcp.position, requestedTargets);
+
+            var tcpErrors = new List<float>();
+            var solved = CcdIkSolver.SolveBatch(
+                ctrl, tcp, targets, ikValidationIterations, 0.004f, tcpErrors);
+            if (solved == null || solved.Count != targets.Count)
             {
                 error = "IK pre-solve failed.";
                 return false;
             }
+
+            float maxError = 0f;
+            for (int i = 0; i < tcpErrors.Count; i++)
+                maxError = Mathf.Max(maxError, tcpErrors[i]);
+            if (maxError > ikWarningErrorMeters)
+            {
+                Debug.LogWarning(
+                    $"[RobotAI] IK validation residual is high " +
+                    $"({maxError:0.000} m), but the waypoint is inside the " +
+                    "declared workspace. Allowing preview; execution will " +
+                    "perform the final sampled IK solve.");
+            }
             return true;
+        }
+
+        private List<Vector3> BuildManipulatorSamples(
+            Vector3 start, IReadOnlyList<Vector3> requestedTargets)
+        {
+            var samples = new List<Vector3>();
+            float spacing = Mathf.Max(0.005f, ikSampleSpacingMeters);
+            int minSamples = Mathf.Max(1, ikMinSegmentSamples);
+            Vector3 from = start;
+            for (int i = 0; i < requestedTargets.Count; i++)
+            {
+                Vector3 to = requestedTargets[i];
+                int count = Mathf.Max(
+                    minSamples,
+                    Mathf.CeilToInt(Vector3.Distance(from, to) / spacing));
+                for (int s = 1; s <= count; s++)
+                    samples.Add(Vector3.Lerp(from, to, s / (float)count));
+                from = to;
+            }
+            return samples;
         }
 
         private static bool ValidateMobile(

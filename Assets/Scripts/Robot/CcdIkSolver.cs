@@ -121,9 +121,11 @@ namespace VRInteraction.Robot
         /// </summary>
         public static List<float[]> SolveBatch(
             UR3JointController ctrl, Transform tcp, IList<Vector3> targets,
-            int iterations = 40, float tol = 0.002f)
+            int iterations = 40, float tol = 0.002f,
+            IList<float> tcpErrors = null)
         {
             var path = new List<float[]>();
+            tcpErrors?.Clear();
             if (ctrl == null || ctrl.joints == null || tcp == null) return path;
             var root = FindRoot(ctrl);
             if (root == null) return path;
@@ -149,6 +151,7 @@ namespace VRInteraction.Robot
             foreach (var t in targets)
             {
                 IterateCCD(ctrl, tcp, t, iterations, tol, cur);
+                tcpErrors?.Add(Vector3.Distance(tcp.position, t));
                 path.Add((float[])cur.Clone());
             }
 

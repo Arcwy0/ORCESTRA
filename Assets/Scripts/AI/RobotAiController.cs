@@ -177,6 +177,7 @@ namespace VRInteraction.AI
             Debug.Log($"[RobotAI] AI response latency: {timer.ElapsedMilliseconds} ms");
 
             ApplyTranscriptFromDiagnostics(response);
+            LogResponseArtifacts(response);
 
             if (response != null && response.error != null &&
                 !string.IsNullOrEmpty(response.error.message))
@@ -523,6 +524,22 @@ namespace VRInteraction.AI
             if (_input != null) _input.text = text;
             debugCommand = text;
             Debug.Log("[RobotAI] Server ASR transcript: " + text);
+        }
+
+        private static void LogResponseArtifacts(AiCommandResponse response)
+        {
+            if (response == null || response.diagnostics == null) return;
+
+            if (!string.IsNullOrEmpty(response.diagnostics.saved_trace_path))
+                Debug.Log("[RobotAI] Server trace: " +
+                          response.diagnostics.saved_trace_path);
+            if (!string.IsNullOrEmpty(response.diagnostics.saved_image_path))
+                Debug.Log("[RobotAI] Server raw image: " +
+                          response.diagnostics.saved_image_path);
+            if (!string.IsNullOrEmpty(
+                    response.diagnostics.saved_annotated_image_path))
+                Debug.Log("[RobotAI] Server annotated image: " +
+                          response.diagnostics.saved_annotated_image_path);
         }
 
         private static void MarkRejection(AiCommandResponse response, string reason)

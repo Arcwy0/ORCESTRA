@@ -144,6 +144,7 @@ namespace VRInteraction.AI
         public string transcript_text;
         public string saved_image_path;
         public string saved_annotated_image_path;
+        public string saved_trace_path;
         public string rejection_reason;
     }
 

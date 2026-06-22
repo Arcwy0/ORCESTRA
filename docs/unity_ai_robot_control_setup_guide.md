@@ -25,11 +25,15 @@ Unity code:
   Also has a Unity-local mock mode.
 - `Assets/Scripts/AI/AiSceneSnapshotBuilder.cs`
   Serializes placed robot state, camera matrices, MR planes, and known scene
-  objects.
+  objects. Explicit object markers are optional; saturated primitive props are
+  also included as test-scene hints.
 - `Assets/Scripts/AI/AiImageCaptureProviders.cs`
   Provides Unity screenshot capture and a guarded Quest-passthrough fallback.
 - `Assets/Scripts/AI/AiGroundingService.cs`
-  Converts VLM grounding output into Unity world waypoints.
+  Converts VLM grounding output into Unity world waypoints. For unknown objects,
+  it treats the VLM bbox/preferred point as 2D evidence and lifts it to 3D by
+  ray-sampling the image region against physics/MR scene colliders, then falls
+  back to the floor plane only if no geometry is available.
 - `Assets/Scripts/AI/AiPlanValidator.cs`
   Rejects unsafe or malformed plans.
 - `Assets/Scripts/AI/AiPlanPreview.cs`
@@ -146,6 +150,22 @@ Move the gripper in a circle in the vertical plane.
 
 The red cube is included in the Unity scene snapshot as a known object, so
 Unity can ground it by label even if the VLM omits a precise image point.
+
+To test the unknown-object path, remove or disable `AiKnownSceneObjectMarker`
+from a target object and use a command such as:
+
+```text
+Move the gripper to the blue cube.
+```
+
+Expected:
+
+- the server annotated image draws the bbox around the object;
+- the trace shows Qwen 0-1000 coordinates converted in
+  `response_after_coordinate_normalization`;
+- `final_response.plan_ir.waypoints` is empty for the unknown object;
+- Unity logs that it grounded the image bbox through a collider and then
+  previews a waypoint above the hit point.
 
 ## Scene Setup: Manual Path
 
@@ -462,6 +482,7 @@ Gateway environment on the RTX server:
 $env:ROBOT_AI_MODE="openai_compatible"
 $env:ROBOT_AI_BASE_URL="http://127.0.0.1:8000/v1"
 $env:ROBOT_AI_MODEL="Qwen/Qwen3-VL-8B-Instruct"
+$env:ROBOT_AI_VLM_COORD_FORMAT="qwen_1000"
 $env:ROBOT_AI_ASR_MODE="disabled"
 python -m uvicorn server.robot_ai.main:app --host 0.0.0.0 --port 8080
 ```
@@ -562,9 +583,23 @@ is present, use `AndroidTextToSpeech` for working Quest audio.
 Saved screenshots:
 
 ```text
-/workspace/outputs/robot_ai/*_raw.png
-/workspace/outputs/robot_ai/*_annotated.png
+server/deploy/outputs/robot_ai/*_raw.png
+server/deploy/outputs/robot_ai/*_annotated.png
+server/deploy/outputs/robot_ai/*_trace.json
 ```
+
+Set `ROBOT_AI_OUTPUT_DIR_HOST` in `server/deploy/.env` to use a different
+host-visible mounted folder.
+
+Use `*_trace.json` to compare the exact VLM text against the final plan:
+`raw_model_output` is the model JSON, `response_before_repair` is the parsed
+model response after coordinate conversion, and
+`final_response.plan_ir.waypoints` is what Unity executed.
+
+For Qwen3-VL, bbox/preferred point values in `raw_model_output` are expected in
+a 0-1000 image grid. The gateway writes
+`response_after_coordinate_normalization` so you can verify conversion to actual
+screenshot pixels before Unity receives the response.
 
 Speech input test with Sentis ASR:
 
@@ -631,6 +666,9 @@ The digital twin must never move from a server response until:
 ## Current Known Limitations
 
 - Real Meta Passthrough Camera frame access is still a stub/fallback path.
+- Unknown real-world object height/depth in MR requires Quest passthrough depth,
+  scene mesh, or another geometry provider with colliders. Without such
+  geometry, Unity can only fall back to a floor-plane point from the image ray.
 - Sentis Whisper is implemented but not validated against exported Quest assets.
 - Server-side real ASR requires an external ASR runtime.
 - Qwen3-VL requires an external vLLM/SGLang/OpenAI-compatible runtime.
