@@ -100,6 +100,61 @@ public class RobotAiModelTests
     }
 
     [Test]
+    public void ExecutorFallbackAcceptsHighResidualMultiWaypointPath()
+    {
+        Assert.IsTrue(AiMotionExecutor.ShouldUseTcpServoFallback(
+            useTcpServoFallback: true,
+            planKind: "manipulator_reach",
+            waypointCount: 2,
+            maxIkErrorMeters: 0.144f,
+            allowedMaxErrorMeters: 0.08f));
+    }
+
+    [Test]
+    public void ManipulatorPathRepairAddsArcAroundBaseCrossing()
+    {
+        var original = new[]
+        {
+            new Vector3(0.45f, 0.2f, 0f),
+            new Vector3(-0.45f, 0.2f, 0f)
+        };
+
+        var repaired = AiManipulatorPathPlanner.RepairBaseCrossingPath(
+            original,
+            Vector3.zero,
+            baseAvoidRadiusMeters: 0.22f,
+            detourHeightMeters: 0.12f);
+
+        Assert.Greater(repaired.Count, original.Length);
+        for (int i = 0; i < repaired.Count - 1; i++)
+        {
+            float clearance = AiManipulatorPathPlanner.PlanarSegmentDistanceToPoint(
+                repaired[i], repaired[i + 1], Vector3.zero);
+            Assert.GreaterOrEqual(clearance + 0.0001f, 0.22f);
+        }
+    }
+
+    [Test]
+    public void ManipulatorPathRepairKeepsClearSegmentUnchanged()
+    {
+        var original = new[]
+        {
+            new Vector3(0.45f, 0.2f, 0.45f),
+            new Vector3(0.55f, 0.2f, 0.55f)
+        };
+
+        var repaired = AiManipulatorPathPlanner.RepairBaseCrossingPath(
+            original,
+            Vector3.zero,
+            baseAvoidRadiusMeters: 0.22f,
+            detourHeightMeters: 0.12f);
+
+        Assert.AreEqual(original.Length, repaired.Count);
+        Assert.AreEqual(original[0], repaired[0]);
+        Assert.AreEqual(original[1], repaired[1]);
+    }
+
+    [Test]
     public void WavEncoderWritesRiffWaveHeader()
     {
         byte[] wav = WavEncoder.EncodeMono16(new[] { 0f, 0.5f, -0.5f }, 16000);

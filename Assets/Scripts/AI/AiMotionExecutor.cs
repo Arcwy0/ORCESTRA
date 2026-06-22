@@ -53,6 +53,22 @@ namespace VRInteraction.AI
 
         public bool IsRunning => _mode != Mode.Idle;
 
+        public static bool ShouldUseTcpServoFallback(
+            bool useTcpServoFallback,
+            string planKind,
+            int waypointCount,
+            float maxIkErrorMeters,
+            float allowedMaxErrorMeters)
+        {
+            if (!useTcpServoFallback || waypointCount <= 0) return false;
+            if (string.Equals(
+                    planKind,
+                    "geometric_primitive",
+                    System.StringComparison.OrdinalIgnoreCase))
+                return true;
+            return maxIkErrorMeters > allowedMaxErrorMeters;
+        }
+
         public bool Execute(AiCommandResponse response, out string error)
         {
             error = null;
@@ -124,8 +140,14 @@ namespace VRInteraction.AI
                 error = "Manipulator plan has no waypoints.";
                 return false;
             }
+            RepairManipulatorTargets(robot, plan, _tcp.position, requestedTargets);
 
-            if (useTcpServoFallback &&
+            if (ShouldUseTcpServoFallback(
+                    useTcpServoFallback,
+                    plan.kind,
+                    requestedTargets.Count,
+                    0f,
+                    manipulatorMaxIkErrorMeters) &&
                 string.Equals(
                     plan.kind,
                     "geometric_primitive",
@@ -156,15 +178,21 @@ namespace VRInteraction.AI
                 maxError = Mathf.Max(maxError, tcpErrors[i]);
             if (maxError > manipulatorMaxIkErrorMeters)
             {
-                if (useTcpServoFallback && requestedTargets.Count == 1)
+                if (ShouldUseTcpServoFallback(
+                        useTcpServoFallback,
+                        plan.kind,
+                        requestedTargets.Count,
+                        maxError,
+                        manipulatorMaxIkErrorMeters))
                 {
                     Debug.LogWarning(
                         $"[RobotAI] Offline IK residual is high " +
-                        $"({maxError:0.000} m); using TCP servo fallback.");
+                        $"({maxError:0.000} m); using TCP servo fallback " +
+                        $"for {requestedTargets.Count} waypoint(s).");
                     return StartManipulatorServo(requestedTargets, out error);
                 }
 
-                error = $"IK target error is too high ({maxError:0.000} m).";
+                error = $"Offline IK residual is too high ({maxError:0.000} m).";
                 _jointPath.Clear();
                 return false;
             }
@@ -181,6 +209,40 @@ namespace VRInteraction.AI
                 $"tcp_start={_tcp.position} tcp_target={_finalTcpTarget}");
             _mode = Mode.Manipulator;
             return true;
+        }
+
+        private static void RepairManipulatorTargets(
+            PlacedRobot robot,
+            AiPlanIr plan,
+            Vector3 tcpStart,
+            List<Vector3> requestedTargets)
+        {
+            if (robot == null || plan == null || requestedTargets == null ||
+                requestedTargets.Count == 0)
+                return;
+            if (!string.Equals(
+                    plan.kind,
+                    "manipulator_reach",
+                    System.StringComparison.OrdinalIgnoreCase))
+                return;
+
+            var path = new List<Vector3> { tcpStart };
+            path.AddRange(requestedTargets);
+            var repaired = AiManipulatorPathPlanner.RepairBaseCrossingPath(
+                path,
+                robot.transform.position,
+                AiGroundingService.ManipulatorBaseAvoidRadius(robot),
+                AiGroundingService.ManipulatorBaseDetourHeight(robot));
+            if (repaired.Count <= path.Count)
+                return;
+
+            int originalCount = requestedTargets.Count;
+            requestedTargets.Clear();
+            for (int i = 1; i < repaired.Count; i++)
+                requestedTargets.Add(repaired[i]);
+            Debug.Log(
+                $"[RobotAI] Execution repaired manipulator path around base: " +
+                $"{originalCount} -> {requestedTargets.Count} waypoints.");
         }
 
         private bool StartManipulatorServo(

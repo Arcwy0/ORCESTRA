@@ -74,12 +74,20 @@ namespace VRInteraction.AI
                 return false;
             }
 
-            if (response.visual_grounding != null &&
-                response.visual_grounding.confidence > 0f &&
-                response.visual_grounding.confidence < minGroundingConfidence)
+            if (HasLowGroundingConfidence(response.visual_grounding))
             {
                 error = "Grounding confidence is too low.";
                 return false;
+            }
+            if (response.visual_groundings != null)
+            {
+                for (int i = 0; i < response.visual_groundings.Length; i++)
+                {
+                    if (!HasLowGroundingConfidence(response.visual_groundings[i]))
+                        continue;
+                    error = $"Grounding confidence is too low for target {i + 1}.";
+                    return false;
+                }
             }
 
             if (response.plan_ir.waypoints == null ||
@@ -105,6 +113,13 @@ namespace VRInteraction.AI
             }
 
             return true;
+        }
+
+        private bool HasLowGroundingConfidence(AiVisualGrounding grounding)
+        {
+            return grounding != null &&
+                   grounding.confidence > 0f &&
+                   grounding.confidence < minGroundingConfidence;
         }
 
         private static bool KindMatches(RobotKind robotKind, string planKind)

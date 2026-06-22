@@ -78,6 +78,7 @@ namespace VRInteraction.AI
         public string spoken_reply;
         public AiIntent intent;
         public AiVisualGrounding visual_grounding;
+        public AiVisualGrounding[] visual_groundings;
         public AiPlanIr plan_ir;
         public AiDiagnostics diagnostics;
         public AiError error;

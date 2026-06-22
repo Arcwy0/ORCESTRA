@@ -24,12 +24,14 @@ namespace VRInteraction.AI
                 return false;
             }
 
+            SyncVisualGroundings(response);
             bool needsImageGrounding = RequiresImageGrounding(response);
             if (response.plan_ir.waypoints != null &&
                 response.plan_ir.waypoints.Length > 0 &&
                 !needsImageGrounding)
             {
                 NormalizePlanKind(response, robot);
+                RepairManipulatorPath(response, robot);
                 return true;
             }
             if (needsImageGrounding &&
@@ -45,39 +47,161 @@ namespace VRInteraction.AI
             if (TryGenerateGeometricPrimitive(response, robot, out error))
                 return true;
 
-            if (!TryGroundTarget(response, cam, out Vector3 target, out error))
+            if (!TryGroundTargets(response, cam, out List<Vector3> targets,
+                    out error))
                 return false;
+            if (targets.Count == 0)
+            {
+                error = "AI response has no targets to ground.";
+                return false;
+            }
 
             if (robot.kind == RobotKind.Mobile)
             {
                 response.plan_ir.kind = "mobile_route";
-                target.y = GroundY();
-                response.plan_ir.waypoints = new[]
+                var waypoints = new AiWaypoint[targets.Count];
+                for (int i = 0; i < targets.Count; i++)
                 {
-                    new AiWaypoint { position_m = AiModelUtil.Vec3(target) }
-                };
+                    Vector3 p = targets[i];
+                    p.y = GroundY();
+                    waypoints[i] = new AiWaypoint
+                    {
+                        position_m = AiModelUtil.Vec3(p)
+                    };
+                }
+                response.plan_ir.waypoints = waypoints;
                 return true;
             }
 
             response.plan_ir.kind = "manipulator_reach";
-            Vector3 standoff = target + Vector3.up *
-                Mathf.Max(0.05f, response.plan_ir.min_clearance_m);
-            standoff = ClampToReach(robot, standoff);
-            response.plan_ir.waypoints = new[]
+            var manipulatorWaypoints = new AiWaypoint[targets.Count];
+            for (int i = 0; i < targets.Count; i++)
             {
-                new AiWaypoint { position_m = AiModelUtil.Vec3(standoff) }
-            };
+                Vector3 standoff = targets[i] + Vector3.up *
+                    Mathf.Max(0.05f, response.plan_ir.min_clearance_m);
+                standoff = ClampToReach(robot, standoff);
+                manipulatorWaypoints[i] = new AiWaypoint
+                {
+                    position_m = AiModelUtil.Vec3(standoff)
+                };
+            }
+            response.plan_ir.waypoints = manipulatorWaypoints;
+            RepairManipulatorPath(response, robot);
+            return true;
+        }
+
+        public static void RepairManipulatorPath(
+            AiCommandResponse response, PlacedRobot robot)
+        {
+            if (response == null || response.plan_ir == null ||
+                response.plan_ir.waypoints == null || robot == null ||
+                robot.kind == RobotKind.Mobile)
+                return;
+
+            if (!string.Equals(
+                    response.plan_ir.kind,
+                    "manipulator_reach",
+                    System.StringComparison.OrdinalIgnoreCase))
+                return;
+
+            var points = new List<Vector3>();
+            Transform tcp = CcdIkSolver.FindTcp(robot.transform);
+            if (tcp != null)
+                points.Add(tcp.position);
+            for (int i = 0; i < response.plan_ir.waypoints.Length; i++)
+            {
+                var wp = response.plan_ir.waypoints[i];
+                if (wp == null || wp.position_m == null ||
+                    wp.position_m.Length < 3)
+                    return;
+                points.Add(AiModelUtil.ToVector3(wp.position_m));
+            }
+
+            int originalWaypointCount = response.plan_ir.waypoints.Length;
+            var repaired = AiManipulatorPathPlanner.RepairBaseCrossingPath(
+                points,
+                robot.transform.position,
+                ManipulatorBaseAvoidRadius(robot),
+                ManipulatorBaseDetourHeight(robot));
+            if (repaired.Count <= points.Count)
+                return;
+
+            int firstWaypointIndex = tcp != null ? 1 : 0;
+            int waypointCount = Mathf.Max(0, repaired.Count - firstWaypointIndex);
+            var waypoints = new AiWaypoint[waypointCount];
+            float speedScale = response.plan_ir.speed_scale;
+            for (int i = 0; i < waypoints.Length; i++)
+            {
+                Vector3 p = ClampToReach(robot, repaired[i + firstWaypointIndex]);
+                waypoints[i] = new AiWaypoint
+                {
+                    position_m = AiModelUtil.Vec3(p),
+                    speed_scale = speedScale
+                };
+            }
+
+            response.plan_ir.waypoints = waypoints;
+            Debug.Log(
+                $"[RobotAI] Repaired manipulator path around base: " +
+                $"{originalWaypointCount} -> {waypoints.Length} waypoints.");
+        }
+
+        private static void SyncVisualGroundings(AiCommandResponse response)
+        {
+            if (response == null) return;
+            if (response.visual_groundings != null &&
+                response.visual_groundings.Length > 0)
+            {
+                response.visual_grounding = response.visual_groundings[0];
+                return;
+            }
+
+            if (GroundingHasContent(response.visual_grounding))
+                response.visual_groundings = new[] { response.visual_grounding };
+        }
+
+        private static bool TryGroundTargets(
+            AiCommandResponse response, Camera cam, out List<Vector3> targets,
+            out string error)
+        {
+            targets = new List<Vector3>();
+            error = null;
+            var groundings = GetGroundings(response);
+            if (groundings.Count == 0)
+            {
+                if (!TryGroundTarget(response, response.visual_grounding, cam,
+                        out Vector3 target, out error))
+                    return false;
+                targets.Add(target);
+                return true;
+            }
+
+            for (int i = 0; i < groundings.Count; i++)
+            {
+                var grounding = groundings[i];
+                if (!TryGroundTarget(response, grounding, cam,
+                        out Vector3 target, out error))
+                {
+                    string label = grounding != null ? grounding.label : "";
+                    string prefix = string.IsNullOrEmpty(label)
+                        ? $"target {i + 1}"
+                        : $"target {i + 1} '{label}'";
+                    error = $"{prefix}: {error}";
+                    return false;
+                }
+                targets.Add(target);
+            }
+
             return true;
         }
 
         private static bool TryGroundTarget(
-            AiCommandResponse response, Camera cam, out Vector3 target,
-            out string error)
+            AiCommandResponse response, AiVisualGrounding grounding,
+            Camera cam, out Vector3 target, out string error)
         {
             target = Vector3.zero;
             error = null;
 
-            var grounding = response.visual_grounding;
             if (grounding != null &&
                 grounding.world_position_m != null &&
                 grounding.world_position_m.Length >= 3 &&
@@ -87,7 +211,7 @@ namespace VRInteraction.AI
                 return true;
             }
 
-            if (TryKnownSceneObject(response, out target))
+            if (TryKnownSceneObject(response, grounding, out target))
             {
                 if (grounding != null)
                 {
@@ -121,13 +245,50 @@ namespace VRInteraction.AI
 
         private static bool RequiresImageGrounding(AiCommandResponse response)
         {
-            var grounding = response != null ? response.visual_grounding : null;
+            var groundings = GetGroundings(response);
+            if (groundings.Count == 0 && response != null)
+                groundings.Add(response.visual_grounding);
+            for (int i = 0; i < groundings.Count; i++)
+            {
+                var grounding = groundings[i];
+                if (grounding == null) continue;
+                if (grounding.world_position_m != null &&
+                    grounding.world_position_m.Length >= 3 &&
+                    grounding.world_confidence >= 0.6f)
+                    continue;
+                if (GroundingHasImageEvidence(grounding))
+                    return true;
+            }
+            return false;
+        }
+
+        private static List<AiVisualGrounding> GetGroundings(
+            AiCommandResponse response)
+        {
+            var result = new List<AiVisualGrounding>();
+            if (response == null) return result;
+
+            if (response.visual_groundings != null)
+            {
+                for (int i = 0; i < response.visual_groundings.Length; i++)
+                    if (GroundingHasContent(response.visual_groundings[i]))
+                        result.Add(response.visual_groundings[i]);
+            }
+
+            if (result.Count == 0 &&
+                GroundingHasContent(response.visual_grounding))
+                result.Add(response.visual_grounding);
+
+            return result;
+        }
+
+        private static bool GroundingHasContent(AiVisualGrounding grounding)
+        {
             if (grounding == null) return false;
-            if (grounding.world_position_m != null &&
-                grounding.world_position_m.Length >= 3 &&
-                grounding.world_confidence >= 0.6f)
-                return false;
-            return GroundingHasImageEvidence(grounding);
+            return !string.IsNullOrEmpty(grounding.label) ||
+                   grounding.confidence > 0f ||
+                   grounding.world_position_m != null ||
+                   GroundingHasImageEvidence(grounding);
         }
 
         private static bool GroundingHasImageEvidence(AiVisualGrounding grounding)
@@ -301,13 +462,13 @@ namespace VRInteraction.AI
         }
 
         private static bool TryKnownSceneObject(
-            AiCommandResponse response, out Vector3 target)
+            AiCommandResponse response, AiVisualGrounding grounding,
+            out Vector3 target)
         {
             target = Vector3.zero;
             string label = "";
-            if (response.visual_grounding != null &&
-                !string.IsNullOrEmpty(response.visual_grounding.label))
-                label = response.visual_grounding.label;
+            if (grounding != null && !string.IsNullOrEmpty(grounding.label))
+                label = grounding.label;
             if (string.IsNullOrEmpty(label) && response.intent != null)
                 label = response.intent.target_ref;
             if (string.IsNullOrEmpty(label))
@@ -516,6 +677,20 @@ namespace VRInteraction.AI
             if (delta.magnitude <= maxRadius || delta.sqrMagnitude < 1e-8f)
                 return point;
             return center + delta.normalized * maxRadius;
+        }
+
+        public static float ManipulatorBaseAvoidRadius(PlacedRobot robot)
+        {
+            if (robot == null || robot.reachRadius <= 0f)
+                return 0.24f;
+            return Mathf.Clamp(robot.reachRadius * 0.2f, 0.24f, 0.65f);
+        }
+
+        public static float ManipulatorBaseDetourHeight(PlacedRobot robot)
+        {
+            if (robot == null || robot.reachRadius <= 0f)
+                return 0.12f;
+            return Mathf.Clamp(robot.reachRadius * 0.15f, 0.12f, 0.35f);
         }
     }
 }

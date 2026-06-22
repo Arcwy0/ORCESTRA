@@ -226,6 +226,21 @@ namespace VRInteraction.AI
                         request.camera != null ? request.camera.height * 0.5f : Screen.height * 0.5f
                     }
                 },
+                visual_groundings = new[]
+                {
+                    new AiVisualGrounding
+                    {
+                        label = "mock target",
+                        confidence = 0.85f,
+                        world_position_m = world,
+                        world_confidence = 0.8f,
+                        preferred_point_px = new[]
+                        {
+                            request.camera != null ? request.camera.width * 0.5f : Screen.width * 0.5f,
+                            request.camera != null ? request.camera.height * 0.5f : Screen.height * 0.5f
+                        }
+                    }
+                },
                 plan_ir = new AiPlanIr
                 {
                     version = 1,
