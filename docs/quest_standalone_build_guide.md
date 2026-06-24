@@ -20,6 +20,8 @@ Quest 3/3S APK.
 - Internet permission is forced in Player Settings.
 - `INTERNET`, `ACCESS_NETWORK_STATE`, and `RECORD_AUDIO` are declared through
   `Assets/Plugins/Android/ORCESTRAAndroidPermissions.androidlib`.
+- Real-object 3D grounding for Quest camera frames also declares
+  `horizonos.permission.HEADSET_CAMERA` and `com.oculus.permission.USE_SCENE`.
 - Runtime microphone permission is requested before recording on Android.
 - `UR3 > Build > Build Quest APK` builds enabled scenes to
   `Builds/ORCESTRA_Robot_AI_Quest.apk` when Android is the active platform.
@@ -65,17 +67,49 @@ server is reachable from the network.
 
 1. Launch the APK from `Unknown Sources`.
 2. Grant microphone permission when pressing `REC` for the first time.
-3. If using MR placement, complete Quest Space Setup and grant scene/spatial
+3. If using raw Quest camera frames for VLM, grant headset camera permission
+   when prompted.
+4. If grounding real-world objects from the Quest camera, also grant scene
+   permission when prompted. This is required for MRUK environment raycasts
+   from VLM 2D points to real table/floor/object surfaces.
+5. If using MR placement, complete Quest Space Setup and grant scene/spatial
    permissions when prompted.
-4. Press `REC`, speak a command, press `REC` again, and confirm the command text
+6. Press `REC`, speak a command, press `REC` again, and confirm the command text
    appears in the AI panel.
-5. Press `SEND`; the server should receive a `/v1/robot/command_json` request.
-6. Confirm the preview only after the waypoint/path looks correct.
+7. Press `SEND`; the server should receive a `/v1/robot/command_json` request.
+8. Confirm the preview only after the waypoint/path looks correct.
 
-## Current Limitation
+## Quest Passthrough Camera Source
 
-The `QuestPassthroughCamera` image source is still guarded. If direct Meta
-passthrough camera frame access is unavailable, the app falls back to the Unity
-screenshot provider. The standalone APK is build-ready, but real-world unknown
-object grounding still depends on finishing the device-side passthrough camera
-capture spike.
+MR passthrough visibility and raw camera-frame access are separate systems.
+Seeing the real room in the headset only proves passthrough compositing works.
+For VLM input from the physical camera, the project must include Meta MRUK v81+
+and compile with:
+
+```text
+ORCESTRA_META_PCA
+```
+
+The Android manifest declares:
+
+```text
+horizonos.permission.HEADSET_CAMERA
+com.oculus.permission.USE_SCENE
+```
+
+Expected server artifacts:
+
+- `*_quest_passthrough_camera_raw.png` means the raw headset camera frame was
+  sent.
+- `*_unity_screenshot_raw.png` means the app fell back to Unity screen capture.
+
+If the AI panel reports that Quest raw camera capture is not compiled in, install
+Meta MRUK v81+ through the Meta package/Asset Store workflow, add
+`ORCESTRA_META_PCA` to Android scripting define symbols, rebuild the APK, and
+grant the headset camera permission on first use.
+
+If a real object is detected in 2D but the 3D point appears on the floor or far
+from the object, check that `com.oculus.permission.USE_SCENE` was granted and
+that MRUK `EnvironmentRaycastManager` is supported/ready on the headset. Without
+environment raycast, the app can only fall back to Unity colliders or a flat
+floor plane, which is not enough to locate objects on real tables.

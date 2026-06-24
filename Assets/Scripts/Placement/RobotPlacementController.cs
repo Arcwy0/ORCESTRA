@@ -4,6 +4,7 @@ using UnityEngine;
 using UnityEngine.UI;
 using UnityEngine.XR.ARFoundation;
 using UnityEngine.XR.ARSubsystems;
+using VRInteraction.Rig;
 using VRInteraction.Robot;
 using VRInteraction.UI;
 
@@ -30,9 +31,9 @@ namespace VRInteraction.Placement
         public float yawBigStep = 45f;
 
         private static readonly Color GhostCyan =
-            new Color(0.30f, 0.85f, 1f, 0.35f);
+            new Color(0.30f, 0.85f, 1f, 0.80f);
         private static readonly Color GhostRed =
-            new Color(1.00f, 0.32f, 0.26f, 0.42f);
+            new Color(1.00f, 0.32f, 0.26f, 0.85f);
 
         private enum State { Idle, Catalog, Aiming, FineTune }
         private State _state = State.Idle;
@@ -78,11 +79,16 @@ namespace VRInteraction.Placement
         /// Replace the active pointer at runtime (called by RigModeManager when
         /// switching between Desktop and XR mode).
         /// </summary>
-        public void SetPointer(PlacementPointer p) => _pointer = p;
+        public void SetPointer(PlacementPointer p)
+        {
+            if (p == null) return;
+            _pointer = p;
+        }
 
         private void Start()
         {
-            _pointer = FindAnyObjectByType<PlacementPointer>();
+            if (_pointer == null)
+                _pointer = ResolveInitialPointer();
             if (_pointer == null)
             {
                 var camGo = Camera.main != null ? Camera.main.gameObject : gameObject;
@@ -96,6 +102,33 @@ namespace VRInteraction.Placement
             BuildUi();
             CreateLaser();
             SetState(State.Idle);
+        }
+
+        private PlacementPointer ResolveInitialPointer()
+        {
+            var rig = FindAnyObjectByType<RigModeManager>(
+                FindObjectsInactive.Include);
+            if (rig != null)
+            {
+                var cam = Camera.main;
+                if (cam != null && rig.xrCamera != null &&
+                    cam == rig.xrCamera && rig.xrPointer != null)
+                    return rig.xrPointer;
+                if (cam != null && rig.desktopCamera != null &&
+                    cam == rig.desktopCamera && rig.desktopPointer != null)
+                    return rig.desktopPointer;
+#if UNITY_ANDROID && !UNITY_EDITOR
+                if (rig.xrPointer != null)
+                    return rig.xrPointer;
+#endif
+            }
+#if UNITY_ANDROID && !UNITY_EDITOR
+            var xrPointer = FindAnyObjectByType<XrControllerPointer>(
+                FindObjectsInactive.Include);
+            if (xrPointer != null)
+                return xrPointer;
+#endif
+            return FindAnyObjectByType<PlacementPointer>();
         }
 
         private void Update()
@@ -452,6 +485,7 @@ namespace VRInteraction.Placement
             bool any = false;
             foreach (var r in _ghost.GetComponentsInChildren<Renderer>())
             {
+                if (GhostBuilder.IsVisibilityMarker(r.transform)) continue;
                 if (!any) { b = r.bounds; any = true; }
                 else b.Encapsulate(r.bounds);
             }
@@ -512,6 +546,9 @@ namespace VRInteraction.Placement
                 }
             }
 
+            if (TryPhysicsSurfacePoint(ray, out point))
+                return true;
+
             var plane = new Plane(Vector3.up, new Vector3(0, groundY, 0));
             if (plane.Raycast(ray, out float enter) && enter > 0f)
             {
@@ -519,6 +556,39 @@ namespace VRInteraction.Placement
                 return true;
             }
             point = Vector3.zero;
+            return false;
+        }
+
+        private bool TryPhysicsSurfacePoint(Ray ray, out Vector3 point)
+        {
+            var hits = Physics.RaycastAll(
+                ray, 100f, ~0, QueryTriggerInteraction.Ignore);
+            System.Array.Sort(hits, (a, b) => a.distance.CompareTo(b.distance));
+            foreach (var hit in hits)
+            {
+                if (hit.collider == null) continue;
+                if (Vector3.Dot(hit.normal, Vector3.up) < 0.65f) continue;
+                if (IgnorePlacementSurface(hit.transform)) continue;
+                point = hit.point;
+                return true;
+            }
+            point = Vector3.zero;
+            return false;
+        }
+
+        private bool IgnorePlacementSurface(Transform t)
+        {
+            if (t == null) return true;
+            if (_ghost != null && t.IsChildOf(_ghost.transform)) return true;
+            if (_reach != null && t.IsChildOf(_reach.transform)) return true;
+            if (t.GetComponentInParent<Canvas>() != null) return true;
+            foreach (var p in _placed)
+            {
+                if (p.robot == null) continue;
+                if (_relocating != null && p == _relocating) continue;
+                if (t == p.robot.transform || t.IsChildOf(p.robot.transform))
+                    return true;
+            }
             return false;
         }
 

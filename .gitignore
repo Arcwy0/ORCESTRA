@@ -64,3 +64,14 @@ __pycache__/
 server/deploy/models/
 server/deploy/outputs/
 outputs/
+
+# Meta Immersive Debugger local dev-agent settings may contain access tokens.
+[Aa]ssets/[Rr]esources/[Dd]ev[Aa]gent[Ss]ettings.asset
+[Aa]ssets/[Rr]esources/[Dd]ev[Aa]gent[Ss]ettings.asset.meta
+
+# Unity Performance Testing package run artifacts.
+[Aa]ssets/[Rr]esources/[Pp]erformance[Tt]est[Rr]un*.json
+[Aa]ssets/[Rr]esources/[Pp]erformance[Tt]est[Rr]un*.json.meta
+
+# Keep this after the Unity meta-file exception above.
+[Aa]ssets/**/[Tt]emp.meta
