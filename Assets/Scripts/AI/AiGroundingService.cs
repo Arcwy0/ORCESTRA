@@ -1,3 +1,4 @@
+using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using VRInteraction.Placement;
@@ -20,6 +21,49 @@ namespace VRInteraction.AI
             "com.oculus.permission.USE_SCENE";
         private static EnvironmentRaycastManager _environmentRaycastManager;
 #endif
+
+        public static bool IsQuestPassthroughCapture(AiImageCapture capture)
+        {
+            return capture != null &&
+                   string.Equals(capture.source, QuestPassthroughSource,
+                       System.StringComparison.OrdinalIgnoreCase);
+        }
+
+        public static IEnumerator WarmupQuestEnvironmentRaycast(
+            System.Action<string> done)
+        {
+#if ORCESTRA_META_PCA
+#if UNITY_ANDROID && !UNITY_EDITOR
+            if (!Permission.HasUserAuthorizedPermission(ScenePermission))
+            {
+                Permission.RequestUserPermission(ScenePermission);
+                done?.Invoke("MR scene permission requested. Press SEND " +
+                             "again after granting it.");
+                yield break;
+            }
+#endif
+            if (!EnvironmentRaycastManager.IsSupported)
+            {
+                done?.Invoke("MR environment raycast is not supported on this device/session.");
+                yield break;
+            }
+
+            var manager = EnsureEnvironmentRaycastManager();
+            if (manager == null)
+            {
+                done?.Invoke("MR environment raycast manager unavailable.");
+                yield break;
+            }
+
+            for (int i = 0; i < 12; i++)
+                yield return null;
+
+            done?.Invoke(null);
+#else
+            done?.Invoke("MR environment raycast support is not compiled in.");
+            yield break;
+#endif
+        }
 
         public bool EnsureWorldWaypoints(
             AiCommandResponse response, Camera cam, out string error)
@@ -331,6 +375,7 @@ namespace VRInteraction.AI
         {
             target = Vector3.zero;
             error = null;
+            bool requiresEnvironmentDepth = IsQuestPassthroughCapture(capture);
 
             int imageWidth = ImageWidth(cam, capture);
             int imageHeight = ImageHeight(cam, capture);
@@ -342,11 +387,65 @@ namespace VRInteraction.AI
 
             var candidates = BuildImageGroundingCandidates(
                 grounding, imageWidth, imageHeight);
+            string lastHitSource = "";
+            if (requiresEnvironmentDepth)
+            {
+                bool found = false;
+                float bestDistance = float.PositiveInfinity;
+                Vector3 bestTarget = Vector3.zero;
+                Vector2 bestPixel = Vector2.zero;
+                string bestHitSource = "";
+                for (int i = 0; i < candidates.Count; i++)
+                {
+                    Vector2 p = candidates[i];
+                    if (TryRaycastImagePoint(cam, capture, p, imageWidth,
+                            imageHeight, out Vector3 hitPoint,
+                            out string hitSource, out float hitDistance))
+                    {
+                        if (!found || hitDistance < bestDistance)
+                        {
+                            found = true;
+                            bestDistance = hitDistance;
+                            bestTarget = hitPoint;
+                            bestPixel = p;
+                            bestHitSource = hitSource;
+                        }
+                    }
+                    else if (!string.IsNullOrEmpty(hitSource))
+                    {
+                        lastHitSource = hitSource;
+                    }
+                }
+
+                if (found)
+                {
+                    target = bestTarget;
+                    grounding.preferred_point_px = new[] { bestPixel.x, bestPixel.y };
+                    grounding.world_position_m = AiModelUtil.Vec3(target);
+                    grounding.world_confidence = Mathf.Max(
+                        grounding.world_confidence, 0.72f);
+                    Debug.Log(
+                        $"[RobotAI] Grounded Quest image bbox at pixel " +
+                        $"({bestPixel.x:0.0}, {bestPixel.y:0.0}) via " +
+                        $"{bestHitSource}; world=({target.x:0.000}, " +
+                        $"{target.y:0.000}, {target.z:0.000}).");
+                    return true;
+                }
+
+                error = "Quest passthrough grounding did not hit MR " +
+                        "environment depth. " +
+                        (string.IsNullOrEmpty(lastHitSource)
+                            ? "No hit status was returned."
+                            : lastHitSource);
+                return false;
+            }
+
             for (int i = 0; i < candidates.Count; i++)
             {
                 Vector2 p = candidates[i];
                 if (TryRaycastImagePoint(cam, capture, p, imageWidth,
-                        imageHeight, out Vector3 hitPoint, out string hitSource))
+                        imageHeight, out Vector3 hitPoint,
+                        out string hitSource, out _))
                 {
                     target = hitPoint;
                     grounding.preferred_point_px = new[] { p.x, p.y };
@@ -355,9 +454,13 @@ namespace VRInteraction.AI
                         grounding.world_confidence, 0.72f);
                     Debug.Log(
                         $"[RobotAI] Grounded image bbox at pixel " +
-                        $"({p.x:0.0}, {p.y:0.0}) via {hitSource}.");
+                        $"({p.x:0.0}, {p.y:0.0}) via {hitSource}; " +
+                        $"world=({target.x:0.000}, {target.y:0.000}, " +
+                        $"{target.z:0.000}).");
                     return true;
                 }
+                if (!string.IsNullOrEmpty(hitSource))
+                    lastHitSource = hitSource;
             }
 
             for (int i = 0; i < candidates.Count; i++)
@@ -453,15 +556,26 @@ namespace VRInteraction.AI
         private static bool TryRaycastImagePoint(
             Camera cam, AiImageCapture capture, Vector2 topLeftPixel,
             int imageWidth, int imageHeight, out Vector3 target,
-            out string hitSource)
+            out string hitSource, out float hitDistance)
         {
             target = Vector3.zero;
             hitSource = "";
+            hitDistance = 0f;
             if (!TryCreateImageRay(cam, capture, topLeftPixel, imageWidth,
                     imageHeight, out Ray ray, out string raySource,
                     out string rayError))
             {
                 hitSource = rayError;
+                return false;
+            }
+
+            if (IsQuestPassthroughCapture(capture))
+            {
+                if (TryEnvironmentRaycast(ray, out target, out hitSource))
+                {
+                    hitDistance = Vector3.Distance(ray.origin, target);
+                    return true;
+                }
                 return false;
             }
 
@@ -472,11 +586,15 @@ namespace VRInteraction.AI
                 if (!IsValidGroundingHit(hits[i])) continue;
                 target = hits[i].point;
                 hitSource = $"collider {hits[i].collider.name} ({raySource})";
+                hitDistance = hits[i].distance;
                 return true;
             }
 
             if (TryEnvironmentRaycast(ray, out target, out hitSource))
+            {
+                hitDistance = Vector3.Distance(ray.origin, target);
                 return true;
+            }
 
             return false;
         }

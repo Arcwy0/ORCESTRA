@@ -179,10 +179,9 @@ namespace VRInteraction.AI
             _pendingAudioWav = null;
             _pendingAudioSeconds = 0f;
 
-            Destroy(capture.texture);
-
             if (!string.IsNullOrEmpty(error))
             {
+                DisposeCapture(capture);
                 SetStatus("AI request failed: " + error);
                 yield break;
             }
@@ -196,21 +195,41 @@ namespace VRInteraction.AI
                 !string.IsNullOrEmpty(response.error.message))
             {
                 MarkRejection(response, response.error.message);
+                DisposeCapture(capture);
                 SetStatus("AI rejected request: " + response.error.message);
                 yield break;
+            }
+
+            if (AiGroundingService.IsQuestPassthroughCapture(capture))
+            {
+                SetStatus("Preparing MR depth grounding...");
+                string warmupError = null;
+                yield return AiGroundingService.WarmupQuestEnvironmentRaycast(
+                    e => warmupError = e);
+                if (!string.IsNullOrEmpty(warmupError))
+                {
+                    MarkRejection(response, warmupError);
+                    DisposeCapture(capture);
+                    SetStatus("Grounding failed: " + warmupError);
+                    yield break;
+                }
             }
 
             if (!_grounding.EnsureWorldWaypoints(
                     response, Camera.main, capture, out error))
             {
                 MarkRejection(response, error);
+                DisposeCapture(capture);
                 SetStatus("Grounding failed: " + error);
                 yield break;
             }
 
+            SaveGroundingDebugImage(capture, response);
+
             if (!_validator.Validate(response, out error))
             {
                 MarkRejection(response, error);
+                DisposeCapture(capture);
                 SetStatus("Plan rejected: " + error);
                 yield break;
             }
@@ -221,6 +240,7 @@ namespace VRInteraction.AI
             SetStatus(string.IsNullOrEmpty(response.spoken_reply)
                 ? "Plan ready. Confirm or cancel."
                 : response.spoken_reply);
+            DisposeCapture(capture);
         }
 
         private void OnConfirm()
@@ -559,6 +579,30 @@ namespace VRInteraction.AI
                     response.diagnostics.saved_annotated_image_path))
                 Debug.Log("[RobotAI] Server annotated image: " +
                           response.diagnostics.saved_annotated_image_path);
+        }
+
+        private static void SaveGroundingDebugImage(
+            AiImageCapture capture, AiCommandResponse response)
+        {
+            if (AiGroundingDebugImageWriter.TrySave(
+                    capture, response, Camera.main, out string path,
+                    out string error))
+            {
+                Debug.Log("[RobotAI] Client grounding debug image: " + path);
+            }
+            else if (!string.IsNullOrEmpty(error))
+            {
+                Debug.LogWarning("[RobotAI] Could not save client grounding " +
+                                 "debug image: " + error);
+            }
+        }
+
+        private static void DisposeCapture(AiImageCapture capture)
+        {
+            if (capture == null || capture.texture == null)
+                return;
+            UnityEngine.Object.Destroy(capture.texture);
+            capture.texture = null;
         }
 
         private static void MarkRejection(AiCommandResponse response, string reason)

@@ -31,9 +31,13 @@ Unity code:
   Provides Unity screenshot capture and a guarded Quest-passthrough fallback.
 - `Assets/Scripts/AI/AiGroundingService.cs`
   Converts VLM grounding output into Unity world waypoints. For unknown objects,
-  it treats the VLM bbox/preferred point as 2D evidence and lifts it to 3D by
-  ray-sampling the image region against physics/MR scene colliders, then falls
-  back to the floor plane only if no geometry is available.
+  it treats the VLM bbox/preferred point as 2D evidence. Unity screenshots lift
+  this evidence through physics/MR scene colliders and can fall back to the
+  floor plane for VR test scenes. Quest passthrough camera frames require MRUK
+  environment raycast depth and fail explicitly if depth is unavailable.
+- `Assets/Scripts/AI/AiGroundingDebugImageWriter.cs`
+  Saves a client-side PNG overlay with VLM 2D evidence and the final Unity
+  waypoint projected back into the captured image.
 - `Assets/Scripts/AI/AiPlanValidator.cs`
   Rejects unsafe or malformed plans.
 - `Assets/Scripts/AI/AiPlanPreview.cs`

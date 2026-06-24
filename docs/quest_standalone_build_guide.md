@@ -108,8 +108,21 @@ Meta MRUK v81+ through the Meta package/Asset Store workflow, add
 `ORCESTRA_META_PCA` to Android scripting define symbols, rebuild the APK, and
 grant the headset camera permission on first use.
 
-If a real object is detected in 2D but the 3D point appears on the floor or far
-from the object, check that `com.oculus.permission.USE_SCENE` was granted and
-that MRUK `EnvironmentRaycastManager` is supported/ready on the headset. Without
-environment raycast, the app can only fall back to Unity colliders or a flat
-floor plane, which is not enough to locate objects on real tables.
+For Quest passthrough camera frames, real-object 3D grounding requires MRUK
+`EnvironmentRaycastManager`. The app now treats missing/not-ready MR environment
+depth as a grounding failure instead of falling back to Unity colliders or a
+flat floor plane, because those fallbacks can create convincing but wrong
+waypoints for real-world objects. If a request fails at grounding, check that
+`com.oculus.permission.USE_SCENE` was granted and that environment raycast is
+supported/ready on the headset.
+
+After a successful grounding attempt, the app writes a client-side debug overlay
+to:
+
+```text
+Application.persistentDataPath/RobotAI/grounding_debug/*_grounding.png
+```
+
+The overlay uses the exact image sent to the server. Red is the VLM bbox, green
+is the selected image point, cyan is the final Unity waypoint projected back
+into the image, and magenta means the waypoint projection is outside the image.

@@ -47,6 +47,20 @@ public class RobotAiModelTests
     }
 
     [Test]
+    public void BottomLeftViewportConvertsToTopLeftImagePixel()
+    {
+        Vector2 topLeft = AiImageRayUtil.ViewportToTopLeftPixel(
+            new Vector2(0f, 1f), 1280, 960);
+        Vector2 center = AiImageRayUtil.ViewportToTopLeftPixel(
+            new Vector2(0.5f, 0.5f), 1280, 960);
+
+        Assert.AreEqual(0f, topLeft.x, 1e-5f);
+        Assert.AreEqual(0f, topLeft.y, 1e-5f);
+        Assert.AreEqual(640f, center.x, 1e-5f);
+        Assert.AreEqual(480f, center.y, 1e-5f);
+    }
+
+    [Test]
     public void PcaFrameGateRequiresNonDefaultNewTimestamp()
     {
         var first = new System.DateTime(2026, 6, 23, 12, 0, 0,

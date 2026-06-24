@@ -185,7 +185,8 @@ namespace VRInteraction.AI
             return _cameraAccess;
         }
 
-        private sealed class QuestPassthroughRayProvider : IAiImageRayProvider
+        private sealed class QuestPassthroughRayProvider :
+            IAiImageRayProvider, IAiImageProjectionProvider
         {
             private readonly PassthroughCameraAccess _access;
             private readonly Pose _cameraPose;
@@ -219,6 +220,31 @@ namespace VRInteraction.AI
                     error = "PassthroughCameraAccess returned an invalid ray.";
                     return false;
                 }
+                return true;
+            }
+
+            public bool TryProjectWorldToTopLeftPixel(
+                Vector3 worldPosition, int imageWidth, int imageHeight,
+                out Vector2 topLeftPixel, out string error)
+            {
+                topLeftPixel = Vector2.zero;
+                error = null;
+                if (_access == null || !_access.IsPlaying)
+                {
+                    error = "PassthroughCameraAccess is not playing.";
+                    return false;
+                }
+
+                Vector2 viewport = _access.WorldToViewportPoint(
+                    worldPosition, _cameraPose);
+                if (!AiModelUtil.IsFinite(viewport))
+                {
+                    error = "PassthroughCameraAccess returned an invalid viewport point.";
+                    return false;
+                }
+
+                topLeftPixel = AiImageRayUtil.ViewportToTopLeftPixel(
+                    viewport, imageWidth, imageHeight);
                 return true;
             }
         }

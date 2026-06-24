@@ -39,6 +39,13 @@ namespace VRInteraction.AI
             out Ray ray, out string error);
     }
 
+    public interface IAiImageProjectionProvider
+    {
+        bool TryProjectWorldToTopLeftPixel(
+            Vector3 worldPosition, int imageWidth, int imageHeight,
+            out Vector2 topLeftPixel, out string error);
+    }
+
     public static class AiImageRayUtil
     {
         public static Vector2 TopLeftPixelToViewport(
@@ -49,6 +56,16 @@ namespace VRInteraction.AI
             return new Vector2(
                 Mathf.Clamp01(topLeftPixel.x / width),
                 Mathf.Clamp01(1f - topLeftPixel.y / height));
+        }
+
+        public static Vector2 ViewportToTopLeftPixel(
+            Vector2 viewport, int imageWidth, int imageHeight)
+        {
+            float width = Mathf.Max(1f, imageWidth);
+            float height = Mathf.Max(1f, imageHeight);
+            return new Vector2(
+                viewport.x * width,
+                (1f - viewport.y) * height);
         }
     }
 
@@ -236,7 +253,10 @@ namespace VRInteraction.AI
         public static bool IsFinite(Vector3 v) =>
             IsFinite(v.x) && IsFinite(v.y) && IsFinite(v.z);
 
-        private static bool IsFinite(float v) =>
+        public static bool IsFinite(Vector2 v) =>
+            IsFinite(v.x) && IsFinite(v.y);
+
+        public static bool IsFinite(float v) =>
             !float.IsNaN(v) && !float.IsInfinity(v);
     }
 }
