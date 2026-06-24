@@ -1566,7 +1566,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::VRInteraction.AI.RobotAiController
   commandClient: {fileID: 0}
   useLocalMock: 0
-  serverUrl: http://ru.tuna.am:34200/v1/robot/command
+  serverUrl: http://nl.tuna.am:33247/v1/robot/command
   imageSourceMode: 1
   debugCommand: Move the gripper to the yellow ball.
   enableSpeech: 1
