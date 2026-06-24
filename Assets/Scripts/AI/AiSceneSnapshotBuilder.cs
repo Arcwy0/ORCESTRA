@@ -10,7 +10,7 @@ namespace VRInteraction.AI
     {
         public static AiCommandRequest Build(
             string sessionId, string commandText, string imageSource,
-            int imageWidth, int imageHeight)
+            int imageWidth, int imageHeight, AiImageCapture capture = null)
         {
             var cam = Camera.main;
             return new AiCommandRequest
@@ -20,7 +20,7 @@ namespace VRInteraction.AI
                 image_source = imageSource,
                 audio_format = "",
                 audio_sample_rate_hz = 0,
-                camera = BuildCamera(cam, imageWidth, imageHeight),
+                camera = BuildCamera(cam, imageWidth, imageHeight, capture),
                 robots = BuildRobots(),
                 mr_planes = BuildPlanes(),
                 known_scene_objects = BuildKnownSceneObjects()
@@ -28,8 +28,21 @@ namespace VRInteraction.AI
         }
 
         private static AiCameraSnapshot BuildCamera(
-            Camera cam, int imageWidth, int imageHeight)
+            Camera cam, int imageWidth, int imageHeight,
+            AiImageCapture capture)
         {
+            if (capture != null && capture.hasCameraMatrices)
+            {
+                return new AiCameraSnapshot
+                {
+                    world_from_camera = AiModelUtil.Matrix(
+                        capture.worldFromCamera),
+                    projection = AiModelUtil.Matrix(capture.projection),
+                    width = imageWidth,
+                    height = imageHeight
+                };
+            }
+
             if (cam == null)
             {
                 return new AiCameraSnapshot

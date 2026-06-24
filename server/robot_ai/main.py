@@ -59,8 +59,10 @@ async def robot_command(
     image_bytes = await image.read() if image is not None else None
     audio_bytes = await audio.read() if audio is not None else None
     logger.info(
-        "request parsed session=%s command_len=%d robots=%d image_bytes=%d audio_bytes=%d",
+        "request parsed session=%s image_source=%s command_len=%d robots=%d "
+        "image_bytes=%d audio_bytes=%d",
         request.session_id,
+        request.image_source,
         len(request.command_text or ""),
         len(request.robots or []),
         len(image_bytes or b""),
@@ -97,8 +99,10 @@ async def robot_command_json(
         image_bytes = _decode_optional_base64(payload.image_png_base64)
         audio_bytes = _decode_optional_base64(payload.audio_wav_base64)
         logger.info(
-            "json request parsed session=%s command_len=%d robots=%d image_bytes=%d audio_bytes=%d",
+            "json request parsed session=%s image_source=%s command_len=%d "
+            "robots=%d image_bytes=%d audio_bytes=%d",
             request.session_id,
+            request.image_source,
             len(request.command_text or ""),
             len(request.robots or []),
             len(image_bytes or b""),

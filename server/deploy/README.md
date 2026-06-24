@@ -68,12 +68,16 @@ For Qwen3-VL, keep:
 
 ```text
 ROBOT_AI_VLM_COORD_FORMAT=qwen_1000
+ROBOT_AI_VLM_IMAGE_MAX_SIDE=896
 ```
 
-Qwen returns visual grounding boxes/points in a 0-1000 top-left image grid. The
-gateway converts those values to the actual Unity screenshot pixel resolution
-before saving annotated images or returning the response to Unity. If you switch
-to a model that returns true image pixels, set this to `pixel`.
+Qwen3-VL grounding uses a 0-1000 relative image grid. The gateway scales that
+grid to the submitted `request.camera.width`/`request.camera.height` before it
+saves annotated images and before Unity lifts the point to 3D. `auto` treats
+Qwen models as `qwen_1000`; use `pixel` only for a model that always returns
+true image pixels.
+The gateway still saves the original request image; `ROBOT_AI_VLM_IMAGE_MAX_SIDE`
+only controls the resized copy sent into vLLM.
 
 ## 4. Download Model Locally
 

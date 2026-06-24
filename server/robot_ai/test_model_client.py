@@ -1,6 +1,9 @@
 import os
+import base64
+import io
 import json
 import tempfile
+import urllib.error
 from pathlib import Path
 import unittest
 
@@ -20,6 +23,7 @@ if HAS_PYDANTIC:
     )
     from server.robot_ai.schemas import (
         CameraSnapshot,
+        ErrorPayload,
         KnownSceneObject,
         Intent,
         PlanIr,
@@ -112,6 +116,76 @@ class RobotAiGatewayTests(unittest.TestCase):
         self.assertEqual(response.diagnostics.asr_mode, "disabled")
         self.assertEqual(response.diagnostics.audio_bytes, 4)
         self.assertEqual(response.diagnostics.transcript_text, "")
+
+    def test_image_hash_diagnostic_tracks_uploaded_bytes(self):
+        old_save_images = os.environ.get("ROBOT_AI_SAVE_IMAGES")
+        old_save_traces = os.environ.get("ROBOT_AI_SAVE_TRACES")
+        try:
+            os.environ["ROBOT_AI_SAVE_IMAGES"] = "0"
+            os.environ["ROBOT_AI_SAVE_TRACES"] = "0"
+            request = RobotCommandRequest(
+                session_id="s",
+                command_text="move to target",
+                image_source="quest_passthrough_camera",
+                camera=CameraSnapshot(width=640, height=480),
+            )
+
+            response = make_response(request, image_bytes=b"abc")
+
+            self.assertEqual(response.diagnostics.image_sha256_12,
+                             "ba7816bf8f01")
+        finally:
+            if old_save_images is None:
+                os.environ.pop("ROBOT_AI_SAVE_IMAGES", None)
+            else:
+                os.environ["ROBOT_AI_SAVE_IMAGES"] = old_save_images
+            if old_save_traces is None:
+                os.environ.pop("ROBOT_AI_SAVE_TRACES", None)
+            else:
+                os.environ["ROBOT_AI_SAVE_TRACES"] = old_save_traces
+
+    def test_output_artifact_write_failure_does_not_fail_request(self):
+        old_output_dir = os.environ.get("ROBOT_AI_OUTPUT_DIR")
+        old_save_images = os.environ.get("ROBOT_AI_SAVE_IMAGES")
+        old_save_traces = os.environ.get("ROBOT_AI_SAVE_TRACES")
+        with tempfile.TemporaryDirectory() as tmp:
+            blocked_parent = Path(tmp) / "blocked"
+            blocked_parent.write_text("not a directory", encoding="utf-8")
+            try:
+                os.environ["ROBOT_AI_OUTPUT_DIR"] = str(
+                    blocked_parent / "robot_ai"
+                )
+                os.environ["ROBOT_AI_SAVE_IMAGES"] = "1"
+                os.environ["ROBOT_AI_SAVE_TRACES"] = "1"
+                request = RobotCommandRequest(
+                    session_id="s",
+                    command_text="move to target",
+                    image_source="quest_passthrough_camera",
+                    camera=CameraSnapshot(width=640, height=480),
+                )
+
+                response = make_response(request, image_bytes=b"abc")
+
+                self.assertIsNone(response.error)
+                self.assertEqual(response.diagnostics.saved_image_path, "")
+                self.assertEqual(
+                    response.diagnostics.saved_annotated_image_path, "")
+                self.assertEqual(response.diagnostics.saved_trace_path, "")
+                self.assertEqual(response.diagnostics.image_sha256_12,
+                                 "ba7816bf8f01")
+            finally:
+                if old_output_dir is None:
+                    os.environ.pop("ROBOT_AI_OUTPUT_DIR", None)
+                else:
+                    os.environ["ROBOT_AI_OUTPUT_DIR"] = old_output_dir
+                if old_save_images is None:
+                    os.environ.pop("ROBOT_AI_SAVE_IMAGES", None)
+                else:
+                    os.environ["ROBOT_AI_SAVE_IMAGES"] = old_save_images
+                if old_save_traces is None:
+                    os.environ.pop("ROBOT_AI_SAVE_TRACES", None)
+                else:
+                    os.environ["ROBOT_AI_SAVE_TRACES"] = old_save_traces
 
     def test_mock_asr_replaces_command_text_with_transcript(self):
         os.environ["ROBOT_AI_ASR_MODE"] = "mock"
@@ -480,6 +554,224 @@ class RobotAiGatewayTests(unittest.TestCase):
             else:
                 os.environ["ROBOT_AI_VLM_COORD_FORMAT"] = old_format
 
+    def test_default_coordinate_format_scales_qwen_grid(self):
+        old_format = os.environ.get("ROBOT_AI_VLM_COORD_FORMAT")
+        try:
+            os.environ.pop("ROBOT_AI_VLM_COORD_FORMAT", None)
+            request = RobotCommandRequest(
+                session_id="s",
+                command_text="Move the gripper to the yellow ball.",
+                image_source="quest_passthrough_camera",
+                camera=CameraSnapshot(width=1280, height=960),
+            )
+            response = RobotCommandResponse(
+                visual_grounding=VisualGrounding(
+                    label="yellow ball",
+                    confidence=0.98,
+                    bbox_xyxy_px=[582, 432, 642, 508],
+                    preferred_point_px=[612, 470],
+                ),
+            )
+
+            _normalize_visual_grounding_coordinates(request, response)
+
+            self.assertAlmostEqual(
+                response.visual_grounding.bbox_xyxy_px[0],
+                582 / 1000 * 1280,
+                places=4,
+            )
+            self.assertAlmostEqual(
+                response.visual_grounding.bbox_xyxy_px[1],
+                432 / 1000 * 960,
+                places=4,
+            )
+            self.assertAlmostEqual(
+                response.visual_grounding.preferred_point_px[0],
+                612 / 1000 * 1280,
+                places=4,
+            )
+            self.assertAlmostEqual(
+                response.visual_grounding.preferred_point_px[1],
+                470 / 1000 * 960,
+                places=4,
+            )
+        finally:
+            if old_format is None:
+                os.environ.pop("ROBOT_AI_VLM_COORD_FORMAT", None)
+            else:
+                os.environ["ROBOT_AI_VLM_COORD_FORMAT"] = old_format
+
+    def test_auto_coordinate_format_scales_ambiguous_qwen_grounding(self):
+        old_format = os.environ.get("ROBOT_AI_VLM_COORD_FORMAT")
+        old_model = os.environ.get("ROBOT_AI_MODEL")
+        try:
+            os.environ["ROBOT_AI_VLM_COORD_FORMAT"] = "auto"
+            os.environ["ROBOT_AI_MODEL"] = "Qwen/Qwen3-VL-8B-Instruct-FP8"
+            request = RobotCommandRequest(
+                session_id="s",
+                command_text="Move the gripper to the yellow ball.",
+                image_source="quest_passthrough_camera",
+                camera=CameraSnapshot(width=1280, height=960),
+            )
+            response = RobotCommandResponse(
+                visual_grounding=VisualGrounding(
+                    label="yellow ball",
+                    confidence=0.98,
+                    bbox_xyxy_px=[582, 432, 642, 508],
+                    preferred_point_px=[612, 470],
+                ),
+            )
+
+            _normalize_visual_grounding_coordinates(request, response)
+
+            self.assertAlmostEqual(
+                response.visual_grounding.bbox_xyxy_px[0],
+                744.96,
+                places=4,
+            )
+            self.assertAlmostEqual(
+                response.visual_grounding.preferred_point_px[1],
+                451.2,
+                places=4,
+            )
+        finally:
+            if old_format is None:
+                os.environ.pop("ROBOT_AI_VLM_COORD_FORMAT", None)
+            else:
+                os.environ["ROBOT_AI_VLM_COORD_FORMAT"] = old_format
+            if old_model is None:
+                os.environ.pop("ROBOT_AI_MODEL", None)
+            else:
+                os.environ["ROBOT_AI_MODEL"] = old_model
+
+    def test_auto_coordinate_format_uses_default_qwen_model(self):
+        old_format = os.environ.get("ROBOT_AI_VLM_COORD_FORMAT")
+        old_model = os.environ.get("ROBOT_AI_MODEL")
+        try:
+            os.environ["ROBOT_AI_VLM_COORD_FORMAT"] = "auto"
+            os.environ.pop("ROBOT_AI_MODEL", None)
+            request = RobotCommandRequest(
+                session_id="s",
+                command_text="Move the gripper to the yellow ball.",
+                image_source="quest_passthrough_camera",
+                camera=CameraSnapshot(width=1280, height=960),
+            )
+            response = RobotCommandResponse(
+                visual_grounding=VisualGrounding(
+                    label="yellow ball",
+                    confidence=0.98,
+                    bbox_xyxy_px=[582, 432, 642, 508],
+                    preferred_point_px=[612, 470],
+                ),
+            )
+
+            _normalize_visual_grounding_coordinates(request, response)
+
+            self.assertAlmostEqual(
+                response.visual_grounding.preferred_point_px[0],
+                783.36,
+                places=4,
+            )
+        finally:
+            if old_format is None:
+                os.environ.pop("ROBOT_AI_VLM_COORD_FORMAT", None)
+            else:
+                os.environ["ROBOT_AI_VLM_COORD_FORMAT"] = old_format
+            if old_model is None:
+                os.environ.pop("ROBOT_AI_MODEL", None)
+            else:
+                os.environ["ROBOT_AI_MODEL"] = old_model
+
+    def test_auto_coordinate_format_preserves_non_qwen_pixel_grounding(self):
+        old_format = os.environ.get("ROBOT_AI_VLM_COORD_FORMAT")
+        old_model = os.environ.get("ROBOT_AI_MODEL")
+        try:
+            os.environ["ROBOT_AI_VLM_COORD_FORMAT"] = "auto"
+            os.environ["ROBOT_AI_MODEL"] = "pixel-grounding-model"
+            request = RobotCommandRequest(
+                session_id="s",
+                command_text="Move the gripper to the controller.",
+                image_source="quest_passthrough_camera",
+                camera=CameraSnapshot(width=1280, height=960),
+            )
+            response = RobotCommandResponse(
+                visual_grounding=VisualGrounding(
+                    label="controller",
+                    confidence=0.88,
+                    bbox_xyxy_px=[742, 404, 832, 470],
+                    preferred_point_px=[787, 437],
+                ),
+            )
+
+            _normalize_visual_grounding_coordinates(request, response)
+
+            self.assertEqual(
+                response.visual_grounding.bbox_xyxy_px,
+                [742.0, 404.0, 832.0, 470.0],
+            )
+            self.assertEqual(
+                response.visual_grounding.preferred_point_px,
+                [787.0, 437.0],
+            )
+        finally:
+            if old_format is None:
+                os.environ.pop("ROBOT_AI_VLM_COORD_FORMAT", None)
+            else:
+                os.environ["ROBOT_AI_VLM_COORD_FORMAT"] = old_format
+            if old_model is None:
+                os.environ.pop("ROBOT_AI_MODEL", None)
+            else:
+                os.environ["ROBOT_AI_MODEL"] = old_model
+
+    def test_not_grounded_full_frame_placeholder_remains_rejected(self):
+        request = RobotCommandRequest(
+            session_id="s",
+            command_text="Move the gripper to the controller.",
+            image_source="quest_passthrough_camera",
+            camera=CameraSnapshot(width=1280, height=960),
+            robots=[
+                RobotSnapshot(
+                    id="UR3_TestRobot",
+                    kind="manipulator",
+                    tcp_position_m=[0.0, 0.2, 0.5],
+                    reach_center_m=[0.0, 0.2, 0.5],
+                    reach_radius_m=0.65,
+                )
+            ],
+        )
+        response = RobotCommandResponse(
+            spoken_reply="I cannot locate the controller.",
+            intent=Intent(
+                robot_id="UR3_TestRobot",
+                task_type="move_to",
+                target_ref="controller",
+                motion_primitive="move_to",
+            ),
+            visual_grounding=VisualGrounding(
+                label="controller",
+                confidence=0.0,
+                bbox_xyxy_px=[0, 0, 1280, 960],
+                preferred_point_px=[640, 480],
+                world_position_m=None,
+                world_confidence=0.0,
+            ),
+            plan_ir=PlanIr(
+                kind="move_to",
+                robot_id="UR3_TestRobot",
+                waypoints=[],
+            ),
+            error=ErrorPayload(
+                code="not_grounded",
+                message="The target 'controller' is not visible.",
+            ),
+        )
+
+        repaired = _repair_or_override_plan(request, response)
+
+        self.assertIsNotNone(repaired.error)
+        self.assertEqual(repaired.error.code, "not_grounded")
+        self.assertEqual(repaired.plan_ir.waypoints, [])
+
     def test_unknown_object_grounding_clears_untrusted_model_waypoints(self):
         request = RobotCommandRequest(
             session_id="s",
@@ -706,6 +998,106 @@ class RobotAiGatewayTests(unittest.TestCase):
                 os.environ.pop("ROBOT_AI_MAX_TOKENS", None)
             else:
                 os.environ["ROBOT_AI_MAX_TOKENS"] = old_max_tokens
+
+    def test_openai_http_error_includes_response_body(self):
+        old_mode = os.environ.get("ROBOT_AI_MODE")
+        old_urlopen = model_client.urllib.request.urlopen
+
+        def fake_urlopen(req, timeout):
+            raise urllib.error.HTTPError(
+                req.full_url,
+                400,
+                "Bad Request",
+                hdrs=None,
+                fp=io.BytesIO(b'{"error":"image tokens exceed limit"}'),
+            )
+
+        try:
+            os.environ["ROBOT_AI_MODE"] = "openai_compatible"
+            model_client.urllib.request.urlopen = fake_urlopen
+            request = RobotCommandRequest(
+                session_id="http-error",
+                command_text="Move the gripper to the cube.",
+                image_source="unity_screenshot",
+                camera=CameraSnapshot(width=640, height=480),
+            )
+
+            with self.assertRaisesRegex(
+                RuntimeError, "image tokens exceed limit"
+            ):
+                make_response(request, image_bytes=None)
+        finally:
+            model_client.urllib.request.urlopen = old_urlopen
+            if old_mode is None:
+                os.environ.pop("ROBOT_AI_MODE", None)
+            else:
+                os.environ["ROBOT_AI_MODE"] = old_mode
+
+    def test_openai_payload_resizes_large_image_before_model(self):
+        old_mode = os.environ.get("ROBOT_AI_MODE")
+        old_max_side = os.environ.get("ROBOT_AI_VLM_IMAGE_MAX_SIDE")
+        old_urlopen = model_client.urllib.request.urlopen
+        captured = {}
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                content = json.dumps({
+                    "spoken_reply": "ok",
+                    "intent": {},
+                    "visual_grounding": {},
+                    "visual_groundings": [],
+                    "plan_ir": {},
+                    "diagnostics": {},
+                    "error": None,
+                })
+                return json.dumps({
+                    "choices": [{"message": {"content": content}}]
+                }).encode("utf-8")
+
+        def fake_urlopen(req, timeout):
+            captured["payload"] = json.loads(req.data.decode("utf-8"))
+            return FakeResponse()
+
+        try:
+            from PIL import Image
+
+            image = Image.new("RGB", (1400, 1000), (20, 40, 80))
+            source = io.BytesIO()
+            image.save(source, format="PNG")
+            os.environ["ROBOT_AI_MODE"] = "openai_compatible"
+            os.environ["ROBOT_AI_VLM_IMAGE_MAX_SIDE"] = "256"
+            model_client.urllib.request.urlopen = fake_urlopen
+            request = RobotCommandRequest(
+                session_id="resize-image",
+                command_text="Move the gripper to the cube.",
+                image_source="unity_screenshot",
+                camera=CameraSnapshot(width=1400, height=1000),
+            )
+
+            make_response(request, image_bytes=source.getvalue())
+
+            content = captured["payload"]["messages"][1]["content"]
+            image_url = content[1]["image_url"]["url"]
+            encoded = image_url.split(",", 1)[1]
+            with Image.open(io.BytesIO(base64.b64decode(encoded))) as resized:
+                self.assertLessEqual(max(resized.size), 256)
+                self.assertEqual(resized.size, (256, 183))
+        finally:
+            model_client.urllib.request.urlopen = old_urlopen
+            if old_mode is None:
+                os.environ.pop("ROBOT_AI_MODE", None)
+            else:
+                os.environ["ROBOT_AI_MODE"] = old_mode
+            if old_max_side is None:
+                os.environ.pop("ROBOT_AI_VLM_IMAGE_MAX_SIDE", None)
+            else:
+                os.environ["ROBOT_AI_VLM_IMAGE_MAX_SIDE"] = old_max_side
 
     def test_trace_file_records_request_and_final_response(self):
         old_save_traces = os.environ.get("ROBOT_AI_SAVE_TRACES")

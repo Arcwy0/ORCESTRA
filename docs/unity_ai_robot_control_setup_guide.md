@@ -161,8 +161,10 @@ Move the gripper to the blue cube.
 Expected:
 
 - the server annotated image draws the bbox around the object;
-- the trace shows Qwen 0-1000 coordinates converted in
-  `response_after_coordinate_normalization`;
+- the trace shows object coordinates in original image pixels in
+  `response_after_coordinate_normalization`; `ROBOT_AI_VLM_COORD_FORMAT=auto`
+  only rescales Qwen 0-1000 coordinates when they cannot already be valid image
+  pixels;
 - `final_response.plan_ir.waypoints` is empty for the unknown object;
 - Unity logs that it grounded the image bbox through a collider and then
   previews a waypoint above the hit point.
@@ -240,8 +242,10 @@ Input:
 
 - `Image Source Mode`:
   - `UnityScreenshot`: default, use for Editor and first Quest tests.
-  - `QuestPassthroughCamera`: currently falls back to screenshot when the real
-    API frame is unavailable.
+  - `QuestPassthroughCamera`: sends the raw Quest headset camera frame only
+    when Meta MRUK v81+ is installed and `ORCESTRA_META_PCA` is enabled in
+    scripting define symbols. If that integration is absent, the UI logs a
+    concrete warning and falls back to `UnityScreenshot`.
 - `Debug Command`: default text placed in the AI panel input field.
 
 Speech:
@@ -482,7 +486,7 @@ Gateway environment on the RTX server:
 $env:ROBOT_AI_MODE="openai_compatible"
 $env:ROBOT_AI_BASE_URL="http://127.0.0.1:8000/v1"
 $env:ROBOT_AI_MODEL="Qwen/Qwen3-VL-8B-Instruct"
-$env:ROBOT_AI_VLM_COORD_FORMAT="qwen_1000"
+$env:ROBOT_AI_VLM_COORD_FORMAT="auto"
 $env:ROBOT_AI_ASR_MODE="disabled"
 python -m uvicorn server.robot_ai.main:app --host 0.0.0.0 --port 8080
 ```
@@ -665,10 +669,14 @@ The digital twin must never move from a server response until:
 
 ## Current Known Limitations
 
-- Real Meta Passthrough Camera frame access is still a stub/fallback path.
-- Unknown real-world object height/depth in MR requires Quest passthrough depth,
-  scene mesh, or another geometry provider with colliders. Without such
-  geometry, Unity can only fall back to a floor-plane point from the image ray.
+- Real Meta Passthrough Camera frame access requires Meta MRUK v81+,
+  `PassthroughCameraAccess`, `horizonos.permission.HEADSET_CAMERA`, and the
+  `ORCESTRA_META_PCA` scripting define. Without those, the app deliberately
+  falls back to Unity screenshot capture.
+- Unknown real-world object height/depth in MR requires
+  `com.oculus.permission.USE_SCENE` and MRUK `EnvironmentRaycastManager`, or
+  another geometry provider with colliders. Without such geometry, Unity can
+  only fall back to a floor-plane point from the image ray.
 - Sentis Whisper is implemented but not validated against exported Quest assets.
 - Server-side real ASR requires an external ASR runtime.
 - Qwen3-VL requires an external vLLM/SGLang/OpenAI-compatible runtime.

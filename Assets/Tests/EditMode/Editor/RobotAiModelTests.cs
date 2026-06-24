@@ -33,6 +33,46 @@ public class RobotAiModelTests
     }
 
     [Test]
+    public void TopLeftImagePixelConvertsToBottomLeftViewport()
+    {
+        Vector2 topLeft = AiImageRayUtil.TopLeftPixelToViewport(
+            new Vector2(0f, 0f), 1280, 960);
+        Vector2 center = AiImageRayUtil.TopLeftPixelToViewport(
+            new Vector2(640f, 480f), 1280, 960);
+
+        Assert.AreEqual(0f, topLeft.x, 1e-5f);
+        Assert.AreEqual(1f, topLeft.y, 1e-5f);
+        Assert.AreEqual(0.5f, center.x, 1e-5f);
+        Assert.AreEqual(0.5f, center.y, 1e-5f);
+    }
+
+    [Test]
+    public void PcaFrameGateRequiresNonDefaultNewTimestamp()
+    {
+        var first = new System.DateTime(2026, 6, 23, 12, 0, 0,
+            System.DateTimeKind.Utc);
+        var second = first.AddMilliseconds(16);
+
+        Assert.IsFalse(AiPassthroughFrameGate.IsFresh(default, default));
+        Assert.IsTrue(AiPassthroughFrameGate.IsFresh(first, default));
+        Assert.IsFalse(AiPassthroughFrameGate.IsFresh(first, first));
+        Assert.IsTrue(AiPassthroughFrameGate.IsFresh(second, first));
+        Assert.IsFalse(AiPassthroughFrameGate.IsFreshForRequest(
+            first, default, first));
+        Assert.IsTrue(AiPassthroughFrameGate.IsFreshForRequest(
+            second, default, first));
+    }
+
+    [Test]
+    public void QuestCameraModeDoesNotSilentlyFallbackToScreenshot()
+    {
+        Assert.IsFalse(AiImageCaptureFallbackPolicy.ShouldUseScreenshotFallback(
+            AiImageSourceMode.QuestPassthroughCamera));
+        Assert.IsTrue(AiImageCaptureFallbackPolicy.ShouldUseScreenshotFallback(
+            AiImageSourceMode.UnityScreenshot));
+    }
+
+    [Test]
     public void CommandResponseJsonRoundTripKeepsPlanKind()
     {
         var response = new AiCommandResponse

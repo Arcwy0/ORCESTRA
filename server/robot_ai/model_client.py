@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import base64
+import hashlib
+import io
 import json
 import logging
 import math
@@ -51,6 +53,7 @@ def make_response(
         "mode": mode,
         "asr_mode": asr_mode,
         "audio_bytes": len(audio_bytes or b""),
+        "image_sha256_12": _image_sha256_12(image_bytes),
         "transcript_text": transcript,
         "raw_model_output": "",
         "model_response_json": None,
@@ -62,6 +65,7 @@ def make_response(
         trace.update(model_trace)
         _sync_visual_groundings(response)
         _normalize_visual_grounding_coordinates(request, response)
+        _clear_unusable_image_grounding(response)
     else:
         response = _mock_response(request)
         _sync_visual_groundings(response)
@@ -81,11 +85,18 @@ def make_response(
     response.diagnostics.asr_latency_ms = asr_latency_ms
     response.diagnostics.audio_bytes = len(audio_bytes or b"")
     response.diagnostics.transcript_text = transcript
+    response.diagnostics.image_sha256_12 = _image_sha256_12(image_bytes)
     response.diagnostics.saved_image_path = saved_raw
     response.diagnostics.saved_annotated_image_path = saved_annotated
     response.diagnostics.saved_trace_path = _maybe_save_trace(
         request, response, trace)
     return response
+
+
+def _image_sha256_12(image_bytes: Optional[bytes]) -> str:
+    if not image_bytes:
+        return ""
+    return hashlib.sha256(image_bytes).hexdigest()[:12]
 
 
 def _mock_response(request: RobotCommandRequest) -> RobotCommandResponse:
@@ -151,6 +162,67 @@ def _vec3(values: list[float]) -> list[float]:
     return [0.0, 0.0, 0.0]
 
 
+def _model_image_max_side() -> int:
+    try:
+        return int(os.getenv("ROBOT_AI_VLM_IMAGE_MAX_SIDE", "896"))
+    except ValueError:
+        return 896
+
+
+def _prepare_model_image(image_bytes: Optional[bytes]) -> Optional[bytes]:
+    if not image_bytes:
+        return image_bytes
+
+    max_side = _model_image_max_side()
+    if max_side <= 0:
+        return image_bytes
+
+    try:
+        from PIL import Image
+
+        with Image.open(io.BytesIO(image_bytes)) as image:
+            width, height = image.size
+            largest = max(width, height)
+            if largest <= max_side:
+                return image_bytes
+
+            scale = max_side / float(largest)
+            new_size = (
+                max(1, int(round(width * scale))),
+                max(1, int(round(height * scale))),
+            )
+            resampling = getattr(getattr(Image, "Resampling", Image),
+                                 "LANCZOS")
+            resized = image.convert("RGB").resize(new_size, resampling)
+            output = io.BytesIO()
+            resized.save(output, format="PNG", optimize=True)
+            prepared = output.getvalue()
+            logger.info(
+                "resized VLM image for model %dx%d -> %dx%d, "
+                "bytes %d -> %d",
+                width,
+                height,
+                new_size[0],
+                new_size[1],
+                len(image_bytes),
+                len(prepared),
+            )
+            return prepared
+    except Exception:
+        logger.exception("failed to resize VLM image; using original image")
+        return image_bytes
+
+
+def _http_error_body(exc: urllib.error.HTTPError) -> str:
+    try:
+        body = exc.read()
+    except Exception:
+        return ""
+    if not body:
+        return ""
+    return body.decode("utf-8", errors="replace").strip()[:4000]
+
+
 def _openai_compatible_response(
     request: RobotCommandRequest, image_bytes: Optional[bytes]
 ) -> tuple[RobotCommandResponse, dict]:
@@ -205,15 +277,21 @@ def _openai_compatible_response(
         "Do not reject as out_of_reach from visual judgment; the gateway and "
         "Unity will validate metric reach using reach_center_m/reach_radius_m. "
         "For visible unknown objects, return a tight bbox and preferred point "
-        "around the referred object only, in Qwen's 0-1000 top-left image grid, "
-        "with no world coordinate and no waypoints. Ignore UI panels, labels, "
+        "around the referred object only, in Qwen's 0-1000 relative image "
+        "coordinate grid with top-left origin, no world coordinate, and no "
+        "waypoints. The gateway will convert those relative image coordinates "
+        "to request.camera.width/request.camera.height pixels. Never use a "
+        "full-image bbox or center point as a placeholder; if you are unsure, "
+        "return empty bbox/preferred_point arrays and a not_grounded error. "
+        "Ignore UI panels, labels, "
         "robot links, and the gripper unless the command explicitly refers to "
         "them. contact_allowed must be false for v1."
     )
     user_text = json.dumps(request.model_dump(), ensure_ascii=False)
     content = [{"type": "text", "text": user_text}]
-    if image_bytes:
-        b64 = base64.b64encode(image_bytes).decode("ascii")
+    model_image_bytes = _prepare_model_image(image_bytes)
+    if model_image_bytes:
+        b64 = base64.b64encode(model_image_bytes).decode("ascii")
         content.append(
             {
                 "type": "image_url",
@@ -231,10 +309,12 @@ def _openai_compatible_response(
         "max_tokens": int(os.getenv("ROBOT_AI_MAX_TOKENS", "2048")),
     }
     logger.info(
-        "forwarding to model base_url=%s model=%s image_bytes=%d timeout_s=%.1f",
+        "forwarding to model base_url=%s model=%s image_bytes=%d "
+        "model_image_bytes=%d timeout_s=%.1f",
         base_url,
         model,
         len(image_bytes or b""),
+        len(model_image_bytes or b""),
         timeout_s,
     )
     data = json.dumps(payload).encode("utf-8")
@@ -256,6 +336,18 @@ def _openai_compatible_response(
             "model response received latency_ms=%.1f",
             (time.perf_counter() - start) * 1000.0,
         )
+    except urllib.error.HTTPError as exc:
+        body = _http_error_body(exc)
+        logger.error(
+            "model endpoint HTTP %s %s: %s",
+            exc.code,
+            exc.reason,
+            body,
+        )
+        suffix = f": {body}" if body else ""
+        raise RuntimeError(
+            f"Model endpoint failed: HTTP {exc.code} {exc.reason}{suffix}"
+        ) from exc
     except (urllib.error.URLError, TimeoutError) as exc:
         raise RuntimeError(f"Model endpoint failed: {exc}") from exc
 
@@ -685,7 +777,8 @@ def _normalize_one_visual_grounding(
 
     scale = coord_format in ("qwen_1000", "qwen", "normalized_1000")
     if coord_format == "auto":
-        scale = _looks_like_qwen_1000_coordinates(grounding)
+        scale = _auto_should_scale_qwen_1000_coordinates(
+            grounding, width, height)
     if scale:
         if grounding.bbox_xyxy_px and len(grounding.bbox_xyxy_px) >= 4:
             grounding.bbox_xyxy_px = [
@@ -703,13 +796,65 @@ def _normalize_one_visual_grounding(
     _clamp_grounding_to_image(grounding, width, height)
 
 
-def _looks_like_qwen_1000_coordinates(grounding: VisualGrounding) -> bool:
+def _auto_should_scale_qwen_1000_coordinates(
+    grounding: VisualGrounding,
+    width: int,
+    height: int,
+) -> bool:
+    if not _coordinates_fit_qwen_1000_grid(grounding):
+        return False
+
+    model = os.getenv(
+        "ROBOT_AI_MODEL", "Qwen/Qwen3-VL-8B-Instruct").strip().lower()
+    if "qwen" in model:
+        return True
+
+    return _looks_like_qwen_1000_coordinates(grounding, width, height)
+
+
+def _coordinates_fit_qwen_1000_grid(grounding: VisualGrounding) -> bool:
+    values = _grounding_coordinate_values(grounding)
+    return bool(values) and min(values) >= 0.0 and max(values) <= 1000.0
+
+
+def _grounding_coordinate_values(grounding: VisualGrounding) -> list[float]:
     values: list[float] = []
     if grounding.bbox_xyxy_px:
         values.extend(float(v) for v in grounding.bbox_xyxy_px[:4])
     if grounding.preferred_point_px:
         values.extend(float(v) for v in grounding.preferred_point_px[:2])
-    return bool(values) and min(values) >= 0.0 and max(values) <= 1000.0
+    return values
+
+
+def _looks_like_qwen_1000_coordinates(
+    grounding: VisualGrounding,
+    width: int,
+    height: int,
+) -> bool:
+    values: list[float] = []
+    x_values: list[float] = []
+    y_values: list[float] = []
+    if grounding.bbox_xyxy_px:
+        bbox = [float(v) for v in grounding.bbox_xyxy_px[:4]]
+        values.extend(bbox)
+        x_values.extend([bbox[0], bbox[2]])
+        y_values.extend([bbox[1], bbox[3]])
+    if grounding.preferred_point_px:
+        point = [float(v) for v in grounding.preferred_point_px[:2]]
+        values.extend(point)
+        x_values.append(point[0])
+        y_values.append(point[1])
+    if not values or min(values) < 0.0 or max(values) > 1000.0:
+        return False
+
+    # When all coordinates already fit the actual image extent, prefer pixels.
+    # Qwen's 0-1000 grid is only inferred in auto mode when at least one axis
+    # coordinate cannot be a valid pixel for the submitted image.
+    fits_pixels = (
+        all(v <= max(width - 1, 0) for v in x_values) and
+        all(v <= max(height - 1, 0) for v in y_values)
+    )
+    return not fits_pixels
 
 
 def _clamp_grounding_to_image(
@@ -746,6 +891,31 @@ def _requires_unity_image_grounding(response: RobotCommandResponse) -> bool:
             grounding.world_confidence >= 0.6
         ):
             continue
+        if _has_usable_image_grounding(grounding):
+            return True
+    return False
+
+
+def _has_usable_image_grounding(grounding: VisualGrounding) -> bool:
+    if grounding is None:
+        return False
+    has_bbox = (
+        grounding.bbox_xyxy_px is not None and
+        len(grounding.bbox_xyxy_px) >= 4
+    )
+    has_point = (
+        grounding.preferred_point_px is not None and
+        len(grounding.preferred_point_px) >= 2
+    )
+    if not has_bbox and not has_point:
+        return False
+    if grounding.confidence <= 0.05 and grounding.world_confidence <= 0.0:
+        return False
+    return True
+
+
+def _clear_unusable_image_grounding(response: RobotCommandResponse) -> None:
+    for grounding in _iter_visual_groundings(response):
         has_bbox = (
             grounding.bbox_xyxy_px is not None and
             len(grounding.bbox_xyxy_px) >= 4
@@ -754,9 +924,12 @@ def _requires_unity_image_grounding(response: RobotCommandResponse) -> bool:
             grounding.preferred_point_px is not None and
             len(grounding.preferred_point_px) >= 2
         )
-        if has_bbox or has_point:
-            return True
-    return False
+        if not has_bbox and not has_point:
+            continue
+        if _has_usable_image_grounding(grounding):
+            continue
+        grounding.bbox_xyxy_px = []
+        grounding.preferred_point_px = []
 
 
 def _circle_tcp_waypoints(
@@ -1329,13 +1502,19 @@ def _maybe_save_images(
         "ROBOT_AI_OUTPUT_DIR",
         "outputs/robot_ai",
     ))
-    out_dir.mkdir(parents=True, exist_ok=True)
-    stamp = time.strftime("%Y%m%d-%H%M%S")
-    request_id = _safe_file_stem(request.session_id or uuid.uuid4().hex)[:16]
-    prefix = f"{stamp}_{request_id}"
-    raw_path = out_dir / f"{prefix}_raw.png"
-    annotated_path = out_dir / f"{prefix}_annotated.png"
-    raw_path.write_bytes(image_bytes)
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        request_id = _safe_file_stem(
+            request.session_id or uuid.uuid4().hex)[:16]
+        image_source = _safe_file_stem(request.image_source or "unknown")[:32]
+        prefix = f"{stamp}_{request_id}_{image_source}"
+        raw_path = out_dir / f"{prefix}_raw.png"
+        annotated_path = out_dir / f"{prefix}_annotated.png"
+        raw_path.write_bytes(image_bytes)
+    except Exception:
+        logger.exception("failed to write raw image artifact to %s", out_dir)
+        return "", ""
 
     try:
         _write_annotated_image(image_bytes, response, annotated_path)
@@ -1364,31 +1543,36 @@ def _maybe_save_trace(
         "ROBOT_AI_OUTPUT_DIR",
         "outputs/robot_ai",
     ))
-    out_dir.mkdir(parents=True, exist_ok=True)
-    stamp = time.strftime("%Y%m%d-%H%M%S")
-    request_id = _safe_file_stem(request.session_id or uuid.uuid4().hex)[:16]
-    path = out_dir / f"{stamp}_{request_id}_trace.json"
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        request_id = _safe_file_stem(
+            request.session_id or uuid.uuid4().hex)[:16]
+        path = out_dir / f"{stamp}_{request_id}_trace.json"
 
-    payload = {
-        "schema_version": 1,
-        "request": request.model_dump(),
-        "mode": trace.get("mode", ""),
-        "asr_mode": trace.get("asr_mode", ""),
-        "audio_bytes": trace.get("audio_bytes", 0),
-        "transcript_text": trace.get("transcript_text", ""),
-        "raw_model_output": trace.get("raw_model_output", ""),
-        "model_response_json": trace.get("model_response_json"),
-        "response_after_coordinate_normalization": trace.get(
-            "response_after_coordinate_normalization"
-        ),
-        "response_before_repair": trace.get("response_before_repair"),
-        "final_response": response.model_dump(),
-    }
-    path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    return _saved_image_display_path(path)
+        payload = {
+            "schema_version": 1,
+            "request": request.model_dump(),
+            "mode": trace.get("mode", ""),
+            "asr_mode": trace.get("asr_mode", ""),
+            "audio_bytes": trace.get("audio_bytes", 0),
+            "transcript_text": trace.get("transcript_text", ""),
+            "raw_model_output": trace.get("raw_model_output", ""),
+            "model_response_json": trace.get("model_response_json"),
+            "response_after_coordinate_normalization": trace.get(
+                "response_after_coordinate_normalization"
+            ),
+            "response_before_repair": trace.get("response_before_repair"),
+            "final_response": response.model_dump(),
+        }
+        path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return _saved_image_display_path(path)
+    except Exception:
+        logger.exception("failed to write trace artifact to %s", out_dir)
+        return ""
 
 
 def _saved_image_display_path(path: Path) -> str:

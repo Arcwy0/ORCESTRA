@@ -2,13 +2,34 @@ using System.Collections.Generic;
 using UnityEngine;
 using VRInteraction.Placement;
 using VRInteraction.Robot;
+#if ORCESTRA_META_PCA
+using Meta.XR;
+#endif
+#if UNITY_ANDROID && !UNITY_EDITOR
+using UnityEngine.Android;
+#endif
 
 namespace VRInteraction.AI
 {
     public class AiGroundingService
     {
+        private const string QuestPassthroughSource =
+            "quest_passthrough_camera";
+#if ORCESTRA_META_PCA
+        private const string ScenePermission =
+            "com.oculus.permission.USE_SCENE";
+        private static EnvironmentRaycastManager _environmentRaycastManager;
+#endif
+
         public bool EnsureWorldWaypoints(
             AiCommandResponse response, Camera cam, out string error)
+        {
+            return EnsureWorldWaypoints(response, cam, null, out error);
+        }
+
+        public bool EnsureWorldWaypoints(
+            AiCommandResponse response, Camera cam, AiImageCapture capture,
+            out string error)
         {
             error = null;
             if (response == null || response.plan_ir == null)
@@ -47,8 +68,8 @@ namespace VRInteraction.AI
             if (TryGenerateGeometricPrimitive(response, robot, out error))
                 return true;
 
-            if (!TryGroundTargets(response, cam, out List<Vector3> targets,
-                    out error))
+            if (!TryGroundTargets(response, cam, capture,
+                    out List<Vector3> targets, out error))
                 return false;
             if (targets.Count == 0)
             {
@@ -161,8 +182,8 @@ namespace VRInteraction.AI
         }
 
         private static bool TryGroundTargets(
-            AiCommandResponse response, Camera cam, out List<Vector3> targets,
-            out string error)
+            AiCommandResponse response, Camera cam, AiImageCapture capture,
+            out List<Vector3> targets, out string error)
         {
             targets = new List<Vector3>();
             error = null;
@@ -170,7 +191,7 @@ namespace VRInteraction.AI
             if (groundings.Count == 0)
             {
                 if (!TryGroundTarget(response, response.visual_grounding, cam,
-                        out Vector3 target, out error))
+                        capture, out Vector3 target, out error))
                     return false;
                 targets.Add(target);
                 return true;
@@ -180,7 +201,7 @@ namespace VRInteraction.AI
             {
                 var grounding = groundings[i];
                 if (!TryGroundTarget(response, grounding, cam,
-                        out Vector3 target, out error))
+                        capture, out Vector3 target, out error))
                 {
                     string label = grounding != null ? grounding.label : "";
                     string prefix = string.IsNullOrEmpty(label)
@@ -197,7 +218,8 @@ namespace VRInteraction.AI
 
         private static bool TryGroundTarget(
             AiCommandResponse response, AiVisualGrounding grounding,
-            Camera cam, out Vector3 target, out string error)
+            Camera cam, AiImageCapture capture, out Vector3 target,
+            out string error)
         {
             target = Vector3.zero;
             error = null;
@@ -222,7 +244,9 @@ namespace VRInteraction.AI
                 return true;
             }
 
-            if (cam == null)
+            bool hasCaptureRayProvider = capture != null &&
+                                         capture.rayProvider != null;
+            if (cam == null && !hasCaptureRayProvider)
             {
                 error = "No active camera for grounding.";
                 return false;
@@ -235,7 +259,8 @@ namespace VRInteraction.AI
                 return false;
             }
 
-            if (TryGroundImageRegion(grounding, cam, out target, out error))
+            if (TryGroundImageRegion(grounding, cam, capture,
+                    out target, out error))
                 return true;
 
             if (string.IsNullOrEmpty(error))
@@ -301,27 +326,36 @@ namespace VRInteraction.AI
         }
 
         private static bool TryGroundImageRegion(
-            AiVisualGrounding grounding, Camera cam, out Vector3 target,
-            out string error)
+            AiVisualGrounding grounding, Camera cam, AiImageCapture capture,
+            out Vector3 target, out string error)
         {
             target = Vector3.zero;
             error = null;
 
-            var candidates = BuildImageGroundingCandidates(grounding, cam);
+            int imageWidth = ImageWidth(cam, capture);
+            int imageHeight = ImageHeight(cam, capture);
+            if (!ImageEvidenceLooksUsable(grounding, imageWidth, imageHeight))
+            {
+                error = "AI image grounding is a low-confidence full-frame placeholder.";
+                return false;
+            }
+
+            var candidates = BuildImageGroundingCandidates(
+                grounding, imageWidth, imageHeight);
             for (int i = 0; i < candidates.Count; i++)
             {
                 Vector2 p = candidates[i];
-                if (TryRaycastImagePoint(cam, p, out RaycastHit hit))
+                if (TryRaycastImagePoint(cam, capture, p, imageWidth,
+                        imageHeight, out Vector3 hitPoint, out string hitSource))
                 {
-                    target = hit.point;
+                    target = hitPoint;
                     grounding.preferred_point_px = new[] { p.x, p.y };
                     grounding.world_position_m = AiModelUtil.Vec3(target);
                     grounding.world_confidence = Mathf.Max(
                         grounding.world_confidence, 0.72f);
                     Debug.Log(
                         $"[RobotAI] Grounded image bbox at pixel " +
-                        $"({p.x:0.0}, {p.y:0.0}) via collider " +
-                        $"{hit.collider.name}.");
+                        $"({p.x:0.0}, {p.y:0.0}) via {hitSource}.");
                     return true;
                 }
             }
@@ -329,7 +363,8 @@ namespace VRInteraction.AI
             for (int i = 0; i < candidates.Count; i++)
             {
                 Vector2 p = candidates[i];
-                if (TryGroundPlaneImagePoint(cam, p, out target))
+                if (TryGroundPlaneImagePoint(cam, capture, p, imageWidth,
+                        imageHeight, out target))
                 {
                     grounding.preferred_point_px = new[] { p.x, p.y };
                     grounding.world_position_m = AiModelUtil.Vec3(target);
@@ -347,7 +382,7 @@ namespace VRInteraction.AI
         }
 
         private static List<Vector2> BuildImageGroundingCandidates(
-            AiVisualGrounding grounding, Camera cam)
+            AiVisualGrounding grounding, int imageWidth, int imageHeight)
         {
             var points = new List<Vector2>();
 
@@ -357,7 +392,7 @@ namespace VRInteraction.AI
                     new Vector2(
                         grounding.preferred_point_px[0],
                         grounding.preferred_point_px[1]),
-                    cam));
+                    imageWidth, imageHeight));
 
             if (grounding.bbox_xyxy_px != null &&
                 grounding.bbox_xyxy_px.Length >= 4)
@@ -372,10 +407,11 @@ namespace VRInteraction.AI
                     grounding.bbox_xyxy_px[3]);
 
                 AddCandidate(points, ClampImagePoint(
-                    new Vector2((x1 + x2) * 0.5f, (y1 + y2) * 0.5f), cam));
+                    new Vector2((x1 + x2) * 0.5f, (y1 + y2) * 0.5f),
+                    imageWidth, imageHeight));
                 AddCandidate(points, ClampImagePoint(
                     new Vector2((x1 + x2) * 0.5f, Mathf.Lerp(y1, y2, 0.75f)),
-                    cam));
+                    imageWidth, imageHeight));
 
                 const int grid = 5;
                 for (int iy = 0; iy < grid; iy++)
@@ -388,7 +424,7 @@ namespace VRInteraction.AI
                             new Vector2(
                                 Mathf.Lerp(x1, x2, tx),
                                 Mathf.Lerp(y1, y2, ty)),
-                            cam));
+                            imageWidth, imageHeight));
                     }
                 }
             }
@@ -404,40 +440,55 @@ namespace VRInteraction.AI
             points.Add(point);
         }
 
-        private static Vector2 ClampImagePoint(Vector2 p, Camera cam)
+        private static Vector2 ClampImagePoint(
+            Vector2 p, int imageWidth, int imageHeight)
         {
-            float maxX = Mathf.Max(0f, cam.pixelWidth - 1f);
-            float maxY = Mathf.Max(0f, cam.pixelHeight - 1f);
+            float maxX = Mathf.Max(0f, imageWidth - 1f);
+            float maxY = Mathf.Max(0f, imageHeight - 1f);
             return new Vector2(
                 Mathf.Clamp(p.x, 0f, maxX),
                 Mathf.Clamp(p.y, 0f, maxY));
         }
 
         private static bool TryRaycastImagePoint(
-            Camera cam, Vector2 topLeftPixel, out RaycastHit bestHit)
+            Camera cam, AiImageCapture capture, Vector2 topLeftPixel,
+            int imageWidth, int imageHeight, out Vector3 target,
+            out string hitSource)
         {
-            float pyBottomLeft = cam.pixelHeight - topLeftPixel.y;
-            var ray = cam.ScreenPointToRay(new Vector3(
-                topLeftPixel.x, pyBottomLeft, 0f));
+            target = Vector3.zero;
+            hitSource = "";
+            if (!TryCreateImageRay(cam, capture, topLeftPixel, imageWidth,
+                    imageHeight, out Ray ray, out string raySource,
+                    out string rayError))
+            {
+                hitSource = rayError;
+                return false;
+            }
+
             var hits = Physics.RaycastAll(ray, 100f);
             System.Array.Sort(hits, (a, b) => a.distance.CompareTo(b.distance));
             for (int i = 0; i < hits.Length; i++)
             {
                 if (!IsValidGroundingHit(hits[i])) continue;
-                bestHit = hits[i];
+                target = hits[i].point;
+                hitSource = $"collider {hits[i].collider.name} ({raySource})";
                 return true;
             }
-            bestHit = new RaycastHit();
+
+            if (TryEnvironmentRaycast(ray, out target, out hitSource))
+                return true;
+
             return false;
         }
 
         private static bool TryGroundPlaneImagePoint(
-            Camera cam, Vector2 topLeftPixel, out Vector3 target)
+            Camera cam, AiImageCapture capture, Vector2 topLeftPixel,
+            int imageWidth, int imageHeight, out Vector3 target)
         {
             target = Vector3.zero;
-            float pyBottomLeft = cam.pixelHeight - topLeftPixel.y;
-            var ray = cam.ScreenPointToRay(new Vector3(
-                topLeftPixel.x, pyBottomLeft, 0f));
+            if (!TryCreateImageRay(cam, capture, topLeftPixel, imageWidth,
+                    imageHeight, out Ray ray, out _, out _))
+                return false;
             var plane = new Plane(Vector3.up, new Vector3(0f, GroundY(), 0f));
             if (plane.Raycast(ray, out float enter) && enter > 0f)
             {
@@ -446,6 +497,161 @@ namespace VRInteraction.AI
             }
             return false;
         }
+
+        private static int ImageWidth(Camera cam, AiImageCapture capture)
+        {
+            if (capture != null && capture.width > 0) return capture.width;
+            return cam != null ? cam.pixelWidth : Screen.width;
+        }
+
+        private static int ImageHeight(Camera cam, AiImageCapture capture)
+        {
+            if (capture != null && capture.height > 0) return capture.height;
+            return cam != null ? cam.pixelHeight : Screen.height;
+        }
+
+        private static bool ImageEvidenceLooksUsable(
+            AiVisualGrounding grounding, int imageWidth, int imageHeight)
+        {
+            if (grounding == null) return false;
+            bool hasPoint = grounding.preferred_point_px != null &&
+                            grounding.preferred_point_px.Length >= 2;
+            bool hasBbox = grounding.bbox_xyxy_px != null &&
+                           grounding.bbox_xyxy_px.Length >= 4;
+            if (!hasPoint && !hasBbox) return false;
+
+            if (grounding.confidence <= 0.05f &&
+                grounding.world_confidence <= 0f)
+                return false;
+
+            if (!hasBbox || imageWidth <= 0 || imageHeight <= 0)
+                return true;
+
+            float x1 = Mathf.Min(grounding.bbox_xyxy_px[0],
+                grounding.bbox_xyxy_px[2]);
+            float y1 = Mathf.Min(grounding.bbox_xyxy_px[1],
+                grounding.bbox_xyxy_px[3]);
+            float x2 = Mathf.Max(grounding.bbox_xyxy_px[0],
+                grounding.bbox_xyxy_px[2]);
+            float y2 = Mathf.Max(grounding.bbox_xyxy_px[1],
+                grounding.bbox_xyxy_px[3]);
+            float boxArea = Mathf.Max(0f, x2 - x1) *
+                            Mathf.Max(0f, y2 - y1);
+            float imageArea = imageWidth * imageHeight;
+            bool nearlyFullFrame = imageArea > 1f &&
+                                   boxArea / imageArea > 0.80f;
+            return !nearlyFullFrame || grounding.confidence >= 0.5f;
+        }
+
+        private static bool TryCreateImageRay(
+            Camera cam, AiImageCapture capture, Vector2 topLeftPixel,
+            int imageWidth, int imageHeight, out Ray ray, out string raySource,
+            out string error)
+        {
+            ray = default;
+            raySource = "";
+            error = null;
+
+            if (capture != null && capture.rayProvider != null)
+            {
+                if (capture.rayProvider.TryCreateRay(
+                        topLeftPixel, imageWidth, imageHeight, out ray,
+                        out error))
+                {
+                    raySource = capture.rayProvider.RaySource;
+                    return true;
+                }
+
+                if (string.Equals(capture.source, QuestPassthroughSource,
+                        System.StringComparison.OrdinalIgnoreCase))
+                    return false;
+            }
+
+            if (capture != null &&
+                string.Equals(capture.source, QuestPassthroughSource,
+                    System.StringComparison.OrdinalIgnoreCase))
+            {
+                error = "Quest passthrough image has no PCA ray provider.";
+                return false;
+            }
+
+            if (cam == null)
+            {
+                error = "No active camera for image ray.";
+                return false;
+            }
+
+            float pyBottomLeft = cam.pixelHeight - topLeftPixel.y;
+            ray = cam.ScreenPointToRay(new Vector3(
+                topLeftPixel.x, pyBottomLeft, 0f));
+            raySource = "Unity camera";
+            return true;
+        }
+
+        private static bool TryEnvironmentRaycast(
+            Ray ray, out Vector3 target, out string hitSource)
+        {
+            target = Vector3.zero;
+            hitSource = "";
+#if ORCESTRA_META_PCA
+#if UNITY_ANDROID && !UNITY_EDITOR
+            if (!Permission.HasUserAuthorizedPermission(ScenePermission))
+            {
+                Permission.RequestUserPermission(ScenePermission);
+                hitSource = "MR scene permission requested";
+                return false;
+            }
+#endif
+            if (!EnvironmentRaycastManager.IsSupported)
+            {
+                hitSource = "MR environment raycast is not supported";
+                return false;
+            }
+
+            var manager = EnsureEnvironmentRaycastManager();
+            if (manager == null)
+            {
+                hitSource = "MR environment raycast manager unavailable";
+                return false;
+            }
+
+            if (manager.Raycast(ray, out var hit, 100f))
+            {
+                target = hit.point;
+                hitSource = "MR environment raycast";
+                return true;
+            }
+            if (hit.status == EnvironmentRaycastHitStatus.HitPointOccluded)
+            {
+                target = hit.point;
+                hitSource = "MR environment raycast occluded hit";
+                return true;
+            }
+
+            hitSource = $"MR environment raycast {hit.status}";
+#endif
+            return false;
+        }
+
+#if ORCESTRA_META_PCA
+        private static EnvironmentRaycastManager EnsureEnvironmentRaycastManager()
+        {
+            if (_environmentRaycastManager == null)
+                _environmentRaycastManager =
+                    Object.FindAnyObjectByType<EnvironmentRaycastManager>(
+                        FindObjectsInactive.Include);
+            if (_environmentRaycastManager == null)
+            {
+                var go = new GameObject("RobotAI_EnvironmentRaycastManager");
+                Object.DontDestroyOnLoad(go);
+                _environmentRaycastManager =
+                    go.AddComponent<EnvironmentRaycastManager>();
+            }
+            if (!_environmentRaycastManager.enabled)
+                _environmentRaycastManager.enabled = true;
+            return _environmentRaycastManager;
+        }
+#endif
 
         private static bool IsValidGroundingHit(RaycastHit hit)
         {

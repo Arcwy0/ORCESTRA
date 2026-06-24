@@ -131,11 +131,22 @@ namespace VRInteraction.AI
             yield return provider.Capture(c => capture = c);
             if (capture == null || capture.texture == null)
             {
-                if (imageSourceMode == AiImageSourceMode.QuestPassthroughCamera)
+                string captureError = capture != null
+                    ? capture.error
+                    : "No image capture returned.";
+                Debug.LogWarning("[RobotAI] " + captureError);
+                if (AiImageCaptureFallbackPolicy.ShouldUseScreenshotFallback(
+                        imageSourceMode))
                 {
-                    SetStatus("Passthrough unavailable; using screenshot.");
+                    SetStatus("Image capture unavailable; using screenshot. " +
+                              captureError);
                     provider = new UnityScreenshotCaptureProvider();
                     yield return provider.Capture(c => capture = c);
+                }
+                else
+                {
+                    SetStatus("Quest camera capture failed: " + captureError);
+                    yield break;
                 }
             }
 
@@ -147,7 +158,9 @@ namespace VRInteraction.AI
 
             var request = AiSceneSnapshotBuilder.Build(
                 _sessionId, debugCommand, capture.source,
-                capture.width, capture.height);
+                capture.width, capture.height, capture);
+            Debug.Log($"[RobotAI] Captured image source={capture.source} " +
+                      $"size={capture.width}x{capture.height}");
             if (_pendingAudioWav != null && _pendingAudioWav.Length > 0)
             {
                 request.audio_format = "wav";
@@ -187,7 +200,8 @@ namespace VRInteraction.AI
                 yield break;
             }
 
-            if (!_grounding.EnsureWorldWaypoints(response, Camera.main, out error))
+            if (!_grounding.EnsureWorldWaypoints(
+                    response, Camera.main, capture, out error))
             {
                 MarkRejection(response, error);
                 SetStatus("Grounding failed: " + error);
@@ -500,6 +514,8 @@ namespace VRInteraction.AI
 
         private string EffectiveAsrLabel()
         {
+            if (asrBackendMode == AiAsrBackendMode.ServerGateway)
+                return "";
             if (_asrBackend == null || _asrBackend.BackendName == null)
                 return "";
             string mode = asrBackendMode.ToString();
@@ -530,6 +546,9 @@ namespace VRInteraction.AI
         {
             if (response == null || response.diagnostics == null) return;
 
+            if (!string.IsNullOrEmpty(response.diagnostics.image_sha256_12))
+                Debug.Log("[RobotAI] Server image sha256/12: " +
+                          response.diagnostics.image_sha256_12);
             if (!string.IsNullOrEmpty(response.diagnostics.saved_trace_path))
                 Debug.Log("[RobotAI] Server trace: " +
                           response.diagnostics.saved_trace_path);

@@ -96,6 +96,7 @@ class Diagnostics(BaseModel):
     asr_latency_ms: float = 0.0
     audio_bytes: int = 0
     transcript_text: str = ""
+    image_sha256_12: str = ""
     saved_image_path: str = ""
     saved_annotated_image_path: str = ""
     saved_trace_path: str = ""

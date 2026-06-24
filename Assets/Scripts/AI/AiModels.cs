@@ -9,6 +9,14 @@ namespace VRInteraction.AI
         QuestPassthroughCamera
     }
 
+    public static class AiImageCaptureFallbackPolicy
+    {
+        public static bool ShouldUseScreenshotFallback(AiImageSourceMode mode)
+        {
+            return mode == AiImageSourceMode.UnityScreenshot;
+        }
+    }
+
     public class AiImageCapture
     {
         public Texture2D texture;
@@ -16,6 +24,50 @@ namespace VRInteraction.AI
         public int width;
         public int height;
         public string error;
+        public bool hasCameraMatrices;
+        public Matrix4x4 worldFromCamera;
+        public Matrix4x4 projection;
+        public IAiImageRayProvider rayProvider;
+    }
+
+    public interface IAiImageRayProvider
+    {
+        string RaySource { get; }
+
+        bool TryCreateRay(
+            Vector2 topLeftPixel, int imageWidth, int imageHeight,
+            out Ray ray, out string error);
+    }
+
+    public static class AiImageRayUtil
+    {
+        public static Vector2 TopLeftPixelToViewport(
+            Vector2 topLeftPixel, int imageWidth, int imageHeight)
+        {
+            float width = Mathf.Max(1f, imageWidth);
+            float height = Mathf.Max(1f, imageHeight);
+            return new Vector2(
+                Mathf.Clamp01(topLeftPixel.x / width),
+                Mathf.Clamp01(1f - topLeftPixel.y / height));
+        }
+    }
+
+    public static class AiPassthroughFrameGate
+    {
+        public static bool IsFresh(DateTime currentTimestamp,
+            DateTime lastCapturedTimestamp)
+        {
+            return currentTimestamp != default &&
+                   currentTimestamp != lastCapturedTimestamp;
+        }
+
+        public static bool IsFreshForRequest(DateTime currentTimestamp,
+            DateTime lastCapturedTimestamp, DateTime requestStartTimestamp)
+        {
+            return IsFresh(currentTimestamp, lastCapturedTimestamp) &&
+                   (requestStartTimestamp == default ||
+                    currentTimestamp != requestStartTimestamp);
+        }
     }
 
     [Serializable]
@@ -143,6 +195,7 @@ namespace VRInteraction.AI
         public float asr_latency_ms;
         public int audio_bytes;
         public string transcript_text;
+        public string image_sha256_12;
         public string saved_image_path;
         public string saved_annotated_image_path;
         public string saved_trace_path;
